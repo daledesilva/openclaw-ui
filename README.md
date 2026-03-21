@@ -184,3 +184,5 @@ Bump **`MAJOR.MINOR.PATCH`** only by editing **`package.json`** / **`npm version
 ## Architecture & documentation
 
 See the [docs folder](docs/) for stack choices, component patterns, and design notes.
+
+**Chain of thought:** Reasoning streams in a **dismissible dialog** (not a side drawer). After each run ends, reasoning is stored on the assistant message so you can use **View reasoning** or the header icon on later turns. Details: [docs/chain-of-thought.md](docs/chain-of-thought.md).

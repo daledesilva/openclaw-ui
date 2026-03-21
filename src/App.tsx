@@ -1,8 +1,19 @@
-import { useState, useEffect } from 'react';
-import { Box, Paper, Typography, Drawer, useMediaQuery, Theme, Alert, Button } from '@mui/material';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import {
+  Box,
+  Paper,
+  Typography,
+  useMediaQuery,
+  Theme,
+  Alert,
+  Button,
+  IconButton,
+  Tooltip,
+} from '@mui/material';
+import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import { ChatBubble } from './components/ChatBubble';
 import { MessageInput } from './components/MessageInput';
-import { ChainOfThoughtSheet } from './components/ChainOfThoughtSheet';
+import { ChainOfThoughtModal } from './components/ChainOfThoughtModal';
 import { TokenSetupScreen } from './components/TokenSetupScreen';
 import { ToolCallBubble } from './components/ToolCallBubble';
 import { ToolResultBubble } from './components/ToolResultBubble';
@@ -143,22 +154,29 @@ function mergeAssistantFinalIntoMessages(
       });
     });
   }
-  const hasAssistantBubble =
-    payload.content.trim().length > 0 ||
-    payload.linkPreviews.length > 0 ||
-    payload.imageUrls.length > 0 ||
-    payload.isError;
-  if (hasAssistantBubble || toolCalls.length === 0) {
-    pieces.push({
-      ...last,
-      kind: 'assistant',
-      content: payload.content,
-      imageUrls: payload.imageUrls.length ? payload.imageUrls : undefined,
-      linkPreviews: payload.linkPreviews.length ? payload.linkPreviews : undefined,
-      isError: payload.isError,
-    });
-  }
+  pieces.push({
+    ...last,
+    kind: 'assistant',
+    content: payload.content,
+    imageUrls: payload.imageUrls.length ? payload.imageUrls : undefined,
+    linkPreviews: payload.linkPreviews.length ? payload.linkPreviews : undefined,
+    isError: payload.isError,
+  });
   return [...prev.slice(0, lastIdx), ...pieces];
+}
+
+function patchLastAssistantWithReasoning(messages: Message[], reasoningRaw: string): Message[] {
+  const trimmed = sanitizeDisplayText(reasoningRaw).trim();
+  if (!trimmed) return messages;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === 'ai' && (!m.kind || m.kind === 'assistant')) {
+      const next = [...messages];
+      next[i] = { ...m, reasoning: trimmed };
+      return next;
+    }
+  }
+  return messages;
 }
 
 export default function App() {
@@ -166,13 +184,31 @@ export default function App() {
   const [tokenReady, setTokenReady] = useState(hasGatewayToken());
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeReasoning, setActiveReasoning] = useState<string>('');
+  const activeReasoningRef = useRef<string>('');
   const [isThinking, setIsThinking] = useState(false);
-  const [cotSheetOpen, setCotSheetOpen] = useState(false);
+  const [cotOpen, setCotOpen] = useState(false);
+  /** When set, modal shows this text instead of live `activeReasoning` (e.g. history bubble). */
+  const [cotReasoningOverride, setCotReasoningOverride] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const isMobile = useMediaQuery((theme: Theme) => theme.breakpoints.down('sm'));
   const lastReasoningLine =
     sanitizeDisplayText(activeReasoning).trim().split('\n').pop() || '';
+  const cotModalText = cotReasoningOverride ?? activeReasoning;
+
+  const lastReasoningFromHistory = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (m.role === 'ai' && (!m.kind || m.kind === 'assistant') && m.reasoning?.trim()) {
+        return m.reasoning;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  useEffect(() => {
+    activeReasoningRef.current = activeReasoning;
+  }, [activeReasoning]);
 
   useEffect(() => {
     if (!tokenReady) return;
@@ -203,7 +239,6 @@ export default function App() {
         });
       },
       onAssistantFinal: (payload) => {
-        setIsThinking(false);
         setMessages((prev) => {
           const lastIdx = prev.length - 1;
           const last = prev[lastIdx];
@@ -211,6 +246,10 @@ export default function App() {
             last?.role === 'ai' && (!last.kind || last.kind === 'assistant') ? last.id : 'stream';
           return mergeAssistantFinalIntoMessages(prev, payload, placeholderId);
         });
+      },
+      onChatTerminal: () => {
+        setIsThinking(false);
+        setMessages((prev) => patchLastAssistantWithReasoning(prev, activeReasoningRef.current));
       },
       onConnected: () => {
         setConnectionStatus('ready');
@@ -264,7 +303,7 @@ export default function App() {
     const aiMsgId = (Date.now() + 1).toString();
     setMessages((prev) => [
       ...prev,
-      { id: aiMsgId, role: 'ai', kind: 'assistant', content: '', reasoning: '' },
+      { id: aiMsgId, role: 'ai', kind: 'assistant', content: '' },
     ]);
 
     sendChatMessage(text);
@@ -283,26 +322,52 @@ export default function App() {
         }}
       >
         <Paper elevation={0} sx={{ p: 2, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 0 }}>
-          <Typography variant="h6" component="h1">
-            OpenClaw UI
-          </Typography>
-          <Typography
-            variant="caption"
-            component="p"
-            sx={{ display: 'block', mt: 0.25, opacity: 0.72, fontSize: '0.68rem', letterSpacing: '0.02em' }}
-          >
-            {appVersion}
-          </Typography>
-          {connectionStatus === 'connecting' && (
-            <Typography variant="caption" sx={{ opacity: 0.9 }}>
-              Connecting…
-            </Typography>
-          )}
-          {connectionStatus === 'error' && connectionError && (
-            <Typography variant="caption" sx={{ opacity: 0.9 }}>
-              {connectionError}
-            </Typography>
-          )}
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="h6" component="h1">
+                OpenClaw UI
+              </Typography>
+              <Typography
+                variant="caption"
+                component="p"
+                sx={{ display: 'block', mt: 0.25, opacity: 0.72, fontSize: '0.68rem', letterSpacing: '0.02em' }}
+              >
+                {appVersion}
+              </Typography>
+              {connectionStatus === 'connecting' && (
+                <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                  Connecting…
+                </Typography>
+              )}
+              {connectionStatus === 'error' && connectionError && (
+                <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                  {connectionError}
+                </Typography>
+              )}
+            </Box>
+            {(sanitizeDisplayText(activeReasoning).trim() || lastReasoningFromHistory) && (
+              <Tooltip title="Chain of thought">
+                <IconButton
+                  color="inherit"
+                  size="small"
+                  aria-label="Open chain of thought"
+                  onClick={() => {
+                    if (sanitizeDisplayText(activeReasoning).trim()) {
+                      setCotReasoningOverride(null);
+                    } else if (lastReasoningFromHistory) {
+                      setCotReasoningOverride(sanitizeDisplayText(lastReasoningFromHistory));
+                    } else {
+                      setCotReasoningOverride(null);
+                    }
+                    setCotOpen(true);
+                  }}
+                  sx={{ flexShrink: 0, opacity: 0.92 }}
+                >
+                  <PsychologyOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Box>
         </Paper>
 
         {connectionError && connectionStatus === 'error' && (
@@ -352,6 +417,15 @@ export default function App() {
                 />
               );
             }
+            const viewReasoningHandler =
+              msg.role === 'ai' &&
+              (!msg.kind || msg.kind === 'assistant') &&
+              msg.reasoning?.trim()
+                ? () => {
+                    setCotReasoningOverride(sanitizeDisplayText(msg.reasoning!));
+                    setCotOpen(true);
+                  }
+                : undefined;
             return (
               <ChatBubble
                 key={msg.id}
@@ -361,15 +435,19 @@ export default function App() {
                 linkPreviews={msg.linkPreviews}
                 caption={msg.role === 'user' ? msg.senderLabel : undefined}
                 isError={msg.role === 'ai' ? msg.isError : undefined}
+                onViewReasoning={viewReasoningHandler}
               />
             );
           })}
-          {isThinking && isMobile && (
+          {isThinking && (
             <ChatBubble
               role="ai"
               content={lastReasoningLine || 'Thinking…'}
               isThinking={true}
-              onClick={() => setCotSheetOpen(true)}
+              onClick={() => {
+                setCotReasoningOverride(null);
+                setCotOpen(true);
+              }}
             />
           )}
         </Box>
@@ -382,41 +460,13 @@ export default function App() {
         </Box>
       </Box>
 
-      {!isMobile && (
-        <Drawer
-          variant="permanent"
-          anchor="right"
-          sx={{
-            width: 350,
-            flexShrink: 0,
-            '& .MuiDrawer-paper': { width: 350, boxSizing: 'border-box', bgcolor: '#fdfdfd' },
-          }}
-        >
-          <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', bgcolor: '#f0f0f0' }}>
-            <Typography variant="subtitle1" fontWeight="bold">
-              Chain of Thought
-            </Typography>
-          </Box>
-          <Box
-            sx={{
-              p: 2,
-              overflowY: 'auto',
-              fontFamily: 'monospace',
-              fontSize: '0.85rem',
-              color: '#555',
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {sanitizeDisplayText(activeReasoning) || 'Awaiting task…'}
-          </Box>
-        </Drawer>
-      )}
-
-      <ChainOfThoughtSheet
-        open={cotSheetOpen}
-        onClose={() => setCotSheetOpen(false)}
-        onOpen={() => setCotSheetOpen(true)}
-        reasoning={activeReasoning}
+      <ChainOfThoughtModal
+        open={cotOpen}
+        onClose={() => {
+          setCotOpen(false);
+          setCotReasoningOverride(null);
+        }}
+        reasoning={cotModalText}
       />
     </Box>
   );

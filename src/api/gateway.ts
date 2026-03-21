@@ -49,6 +49,7 @@ let onConnectedCallback: (() => void) | null = null;
 let onConnectErrorCallback: ((error: string) => void) | null = null;
 let onAssistantFinalCallback: ((payload: ReturnType<typeof parseAssistantDisplayPayload>) => void) | null =
   null;
+let onChatTerminalCallback: ((state: 'final' | 'aborted' | 'error') => void) | null = null;
 
 const pendingReqs = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 let connectReqId: string | null = null;
@@ -359,6 +360,7 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
     if (errorMessage) {
       console.error(`${LOG} chat ${state}:`, errorMessage);
     }
+    onChatTerminalCallback?.(state);
   }
 }
 
@@ -426,6 +428,7 @@ export function initGatewayConnection({
   onReasoning,
   onContent,
   onAssistantFinal,
+  onChatTerminal,
   onConnected,
   onConnectError,
 }: {
@@ -433,6 +436,8 @@ export function initGatewayConnection({
   onReasoning: (chunk: string) => void;
   onContent: (chunk: string) => void;
   onAssistantFinal?: (payload: ReturnType<typeof parseAssistantDisplayPayload>) => void;
+  /** Fired after `final` / `aborted` / `error` chat run states (after `onAssistantFinal` when applicable). */
+  onChatTerminal?: (state: 'final' | 'aborted' | 'error') => void;
   onConnected?: () => void;
   onConnectError?: (error: string) => void;
 }) {
@@ -440,6 +445,7 @@ export function initGatewayConnection({
   onReasoningCallback = onReasoning;
   onContentCallback = onContent;
   onAssistantFinalCallback = onAssistantFinal ?? null;
+  onChatTerminalCallback = onChatTerminal ?? null;
   onConnectedCallback = onConnected ?? null;
   onConnectErrorCallback = onConnectError ?? null;
   connect();

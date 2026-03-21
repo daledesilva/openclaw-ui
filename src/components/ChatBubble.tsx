@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Paper, Typography, CircularProgress } from '@mui/material';
+import { Box, Paper, Typography, CircularProgress, Button } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { sanitizeDisplayText } from '../utils/sanitizeDisplayText';
 import type { LinkPreview } from '../utils/extractLinkPreviews';
@@ -50,6 +50,8 @@ interface ChatBubbleProps {
   caption?: string;
   /** Assistant message that is only an error / failure */
   isError?: boolean;
+  /** Opens chain-of-thought modal for this message (assistant bubbles with saved reasoning) */
+  onViewReasoning?: () => void;
 }
 
 /**
@@ -66,6 +68,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
   onClick,
   caption,
   isError,
+  onViewReasoning,
 }) => {
   const isUser = role === 'user';
   const safeContent = sanitizeDisplayText(content || '');
@@ -141,6 +144,19 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
           <Typography variant="caption" sx={{ opacity: isUser ? 0.85 : 0.7, display: 'block' }}>
             {safeCaption}
           </Typography>
+        ) : null}
+        {!isUser && onViewReasoning ? (
+          <Button
+            variant="text"
+            size="small"
+            onClick={(event) => {
+              event.stopPropagation();
+              onViewReasoning();
+            }}
+            sx={{ alignSelf: 'flex-start', mt: 0.25, py: 0.25, px: 0.5, minHeight: 0, textTransform: 'none' }}
+          >
+            View reasoning
+          </Button>
         ) : null}
       </BubblePaper>
     </Box>
