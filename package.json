@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:local": "git fetch origin && git reset --hard origin/main && npm ci && npm run build",
+    "webhook:deploy": "node scripts/webhook-deploy.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.11.4",
