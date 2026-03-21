@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
-import { Box, Paper, Typography, Drawer, useMediaQuery, Theme, Alert } from '@mui/material';
+import { Box, Paper, Typography, Drawer, useMediaQuery, Theme, Alert, Button } from '@mui/material';
 import { ChatBubble } from './components/ChatBubble';
 import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtSheet } from './components/ChainOfThoughtSheet';
+import { TokenSetupScreen } from './components/TokenSetupScreen';
 import {
   initGatewayConnection,
   sendChatMessage,
   fetchChatHistory,
+  hasGatewayToken,
+  clearStoredGatewayToken,
 } from './api/gateway';
 
 export interface Message {
@@ -29,6 +32,7 @@ function mapHistoryToMessages(
 }
 
 export default function App() {
+  const [tokenReady, setTokenReady] = useState(hasGatewayToken());
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeReasoning, setActiveReasoning] = useState<string>('');
   const [isThinking, setIsThinking] = useState(false);
@@ -40,6 +44,7 @@ export default function App() {
   const lastReasoningLine = activeReasoning.trim().split('\n').pop() || '';
 
   useEffect(() => {
+    if (!tokenReady) return;
     initGatewayConnection({
       onMessage: (message) => {
         if (import.meta.env.DEV) {
@@ -81,7 +86,16 @@ export default function App() {
         setConnectionError(error);
       },
     });
-  }, []);
+  }, [tokenReady]);
+
+  if (!tokenReady) {
+    return <TokenSetupScreen onTokenSet={() => setTokenReady(true)} />;
+  }
+
+  const handleReenterToken = () => {
+    clearStoredGatewayToken();
+    setTokenReady(false);
+  };
 
   const handleSend = (text: string) => {
     if (!text.trim()) return;
@@ -120,7 +134,16 @@ export default function App() {
         </Paper>
 
         {connectionError && connectionStatus === 'error' && (
-          <Alert severity="error" sx={{ m: 2 }} onClose={() => setConnectionError(null)}>
+          <Alert
+            severity="error"
+            sx={{ m: 2 }}
+            onClose={() => setConnectionError(null)}
+            action={
+              <Button color="inherit" size="small" onClick={handleReenterToken}>
+                Re-enter token
+              </Button>
+            }
+          >
             {connectionError}
           </Alert>
         )}

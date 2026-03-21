@@ -1,3 +1,9 @@
+import {
+  loadOrCreateDeviceIdentity,
+  createDeviceBlock,
+  isDeviceSigningAvailable,
+} from './device-auth';
+
 const LOG = '[OpenClaw gateway]';
 const DEBUG = import.meta.env.VITE_OPENCLAW_DEBUG === '1' || import.meta.env.DEV;
 
@@ -52,8 +58,42 @@ function sessionKey(): string {
   return fromEnv || 'main';
 }
 
+const TOKEN_STORAGE_KEY = 'openclaw-gateway-token';
+
+function getStoredToken(): string | null {
+  try {
+    const t = localStorage.getItem(TOKEN_STORAGE_KEY);
+    return t && t.trim() ? t.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredGatewayToken(token: string): void {
+  const trimmed = token?.trim();
+  if (trimmed) {
+    try {
+      localStorage.setItem(TOKEN_STORAGE_KEY, trimmed);
+    } catch {
+      /* quota or disabled */
+    }
+  }
+}
+
+export function clearStoredGatewayToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    /* ignored */
+  }
+}
+
+export function hasGatewayToken(): boolean {
+  return !!(import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN?.trim() || getStoredToken());
+}
+
 function gatewayToken(): string | undefined {
-  return import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  return import.meta.env.VITE_OPENCLAW_GATEWAY_TOKEN?.trim() || getStoredToken() || undefined;
 }
 
 function connect() {
@@ -70,13 +110,36 @@ function connect() {
   let handshakeComplete = false;
   let connectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  const sendConnect = () => {
+  const sendConnect = async (nonce: string) => {
     if (connectReqId || !socket || socket.readyState !== WebSocket.OPEN) return;
     if (connectTimeout) {
       clearTimeout(connectTimeout);
       connectTimeout = null;
     }
-    logInbound({ _: 'sending_connect' }, 'sending connect (challenge fallback or received)');
+    const hasNonce = nonce.trim().length > 0;
+    logInbound({ _: 'sending_connect', hasNonce }, hasNonce ? 'sending connect with device signing' : 'sending connect without device (fallback)');
+
+    let device: { id: string; publicKey: string; signature: string; signedAt: number; nonce: string } | undefined;
+    if (hasNonce && isDeviceSigningAvailable()) {
+      try {
+        const identity = await loadOrCreateDeviceIdentity();
+        device = await createDeviceBlock({
+          identity,
+          nonce,
+          token: gatewayToken(),
+        });
+        if (DEBUG) console.log(`${LOG} device block created for ${device.id}`);
+      } catch (err) {
+        console.error(`${LOG} device signing failed:`, err);
+        onConnectErrorCallback?.(
+          'Device signing failed. Try a modern browser (Chrome 137+, Firefox 129+, Safari 17+) or configure gateway.controlUi.allowInsecureAuth.'
+        );
+        return;
+      }
+    } else if (hasNonce && !isDeviceSigningAvailable()) {
+      console.warn(`${LOG} Ed25519 not available, connecting without device (may fail with DEVICE_IDENTITY_REQUIRED)`);
+    }
+
     const connectPayload = {
       type: 'req',
       id: (connectReqId = `connect-${Date.now()}`),
@@ -96,6 +159,7 @@ function connect() {
         commands: [],
         permissions: {} as Record<string, boolean>,
         auth: gatewayToken() ? { token: gatewayToken() } : undefined,
+        device,
       },
     };
     logOutbound(connectPayload, !!gatewayToken());
@@ -107,8 +171,8 @@ function connect() {
     // Fallback: some gateways don't send connect.challenge (e.g. allowInsecureAuth). Send connect after 2s if nothing arrives.
     connectTimeout = setTimeout(() => {
       if (!challengeReceived) {
-        console.log(`${LOG} no connect.challenge received, sending connect anyway (fallback)`);
-        sendConnect();
+        console.log(`${LOG} no connect.challenge received, sending connect anyway (fallback, no device)`);
+        void sendConnect('');
       }
     }, 2000);
   };
@@ -129,15 +193,19 @@ function connect() {
       challengeReceived = true;
       logInbound(data, `in event connect.challenge`);
       const payload = (data as { payload?: { nonce?: string } }).payload;
-      if (DEBUG && payload?.nonce) {
-        console.log(`${LOG} challenge nonce present (device signing would use it)`);
-      }
-      sendConnect();
+      const nonce = (payload?.nonce ?? '').trim();
+      if (DEBUG && nonce) console.log(`${LOG} challenge nonce present, signing with device`);
+      void sendConnect(nonce);
       return;
     }
 
     if (t === 'res') {
-      const res = data as { id?: string; ok?: boolean; payload?: unknown; error?: { code?: string; message?: string } };
+      const res = data as {
+        id?: string;
+        ok?: boolean;
+        payload?: unknown;
+        error?: { code?: string; message?: string; details?: { code?: string } };
+      };
       logInbound(data, `in res id=${res.id} ok=${res.ok}`);
 
       if (res.id === connectReqId) {
@@ -147,7 +215,15 @@ function connect() {
           console.log(`${LOG} handshake ok, connected`);
           onConnectedCallback?.();
         } else {
-          const errMsg = res.error?.message ?? res.error?.code ?? 'Connect failed';
+          const code = res.error?.details?.code ?? res.error?.code ?? '';
+          const errMsg =
+            code === 'AUTH_TOKEN_MISSING'
+              ? 'Gateway token required. Paste the token from the gateway host (openclaw config get gateway.auth.token) or add VITE_OPENCLAW_GATEWAY_TOKEN to .env.local.'
+              : code === 'DEVICE_IDENTITY_REQUIRED' || res.error?.message === 'device identity required'
+                ? 'Device identity required. Ensure device signing succeeded (modern browser) or set gateway.controlUi.allowInsecureAuth.'
+                : code === 'NOT_PAIRED' || code === 'PAIRING_REQUIRED'
+                  ? 'Device pending approval. Run `openclaw devices list` then `openclaw devices approve <requestId>` on the gateway host (or `openclaw devices approve --latest`).'
+                  : res.error?.message ?? res.error?.code ?? 'Connect failed';
           console.error(`${LOG} connect error:`, res.error);
           onConnectErrorCallback?.(errMsg);
         }

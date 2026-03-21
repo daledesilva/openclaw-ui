@@ -137,9 +137,11 @@ On the host: **`scripts\deploy-local.cmd`** or **`npm run deploy:local`** (disca
 
 1. Install dependencies: `npm install`
 2. Copy [`.env.example`](.env.example) to `.env.local` and set `VITE_OPENCLAW_GATEWAY_URL` to your gateway WebSocket URL (e.g. `ws://192.168.1.50:18789` for remote, or `ws://localhost:18789` if the gateway runs locally).
-3. If the gateway enforces auth, add `VITE_OPENCLAW_GATEWAY_TOKEN` with the same value as `OPENCLAW_GATEWAY_TOKEN` or `--token` on the gateway. See [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [WebChat](https://docs.openclaw.ai/web/webchat) for auth and device-signing details.
+3. **Token required:** When the gateway binds to LAN (non-loopback), it enforces auth. Either add `VITE_OPENCLAW_GATEWAY_TOKEN` in `.env.local`, or leave it unset and paste the token on first load (stored in `localStorage`). Get the token from the gateway host: `openclaw config get gateway.auth.token`. Without a token, the gateway rejects the connection with "gateway token missing".
 4. Run the dev server: `npm run dev`
 5. Open the URL shown (usually `http://localhost:5173`).
+
+**First-time device approval:** After the token passes, a new device may need one-time approval. If you see "Device pending approval", run `openclaw devices list` then `openclaw devices approve <requestId>` (or `--latest`) on the gateway host. For a remote gateway, add `--url ws://<gateway-IP>:18789` and `--token <gateway-token>`. Device identity is stored in `localStorage`; clearing it creates a new device and requires another approval. Requires a modern browser (Chrome 137+, Firefox 129+, Safari 17+).
 
 Leave `.env.local` **off** the gateway PC when running `npm run build` so production builds use the page hostname. Set `VITE_OPENCLAW_DEBUG=1` for verbose gateway frame logging in the console.
 
