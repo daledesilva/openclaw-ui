@@ -74,6 +74,25 @@ ingress:
 
 - **OpenClaw / human:** From repo root run **`scripts\setup-and-serve.cmd`** (Windows) or equivalent; keep it **running**. This is **port 4173** (`0.0.0.0`). After webhook deploys, **`dist/`** updates; **`serve`** usually does **not** need a restart.
 
+**7a — Allow dev UI origins (two-machine dev setup)**
+
+- **OpenClaw:** When the developer runs **`npm run dev`** on another machine, the browser opens the UI at `http://localhost:5173` (or similar). The gateway checks the WebSocket **`Origin`** header and rejects connections from origins not in **`gateway.controlUi.allowedOrigins`**. In `~/.openclaw/openclaw.json`, under **`gateway`**, add:
+
+```json
+"controlUi": {
+  "allowedOrigins": [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:5175"
+  ]
+}
+```
+
+- Covers common Vite ports (5173–5175) and both `localhost` and `127.0.0.1`. If the developer accesses the UI via their machine’s LAN IP (e.g. `http://192.168.50.42:5173`), add that origin too. Restart the gateway after editing.
+
 **8 — Remind the developer**
 
 - **Ask the human to:** On the dev machine, copy [`.env.example`](.env.example) → **`.env.local`** with `VITE_OPENCLAW_GATEWAY_URL=ws://<gateway-LAN-IP>:18789` and run **`npm run dev`**.
@@ -107,18 +126,22 @@ On the host: **`scripts\deploy-local.cmd`** or **`npm run deploy:local`** (disca
 | **notify-host failed** (HTTP **502**) | **Tunnel reached Cloudflare but not your app.** On the gateway PC: (1) **`npm run webhook:deploy`** running and listening on **127.0.0.1:8788**; (2) **`cloudflared tunnel run …`** running; (3) **`config.yml`** `ingress` **`service:`** is **`http://127.0.0.1:8788`** (same port). Test locally: **`curl http://127.0.0.1:8788/health`** → **`ok`**. Start **webhook** before or with **cloudflared**. |
 | **524** / slow notify | Webhook returns **202** quickly; if you still see **524**, pull latest **`webhook-deploy.mjs`** and restart **`webhook:deploy`**. |
 | Other notify errors | **401** = Bearer secret ≠ **`.env.webhook`**; **404** URL/path; **429** overlapping deploy. Workflow retries **502/503/504** a few times. |
-| UI won’t connect to agent | Gateway up; dev **`.env.local`**; firewall / bind **18789** on LAN. |
+| UI won’t connect to agent | Gateway up; **`gateway.bind: "lan"`** (not `loopback`) so port 18789 listens on LAN; auth set for non-loopback; **`gateway.controlUi.allowedOrigins`** includes dev UI origin (e.g. `http://localhost:5173`); dev **`.env.local`**; firewall allows 18789. |
 | UI stale on host | **`serve`** serving **this** repo’s **`dist/`**; run **`deploy-local`**; PWA cache. |
 
 ---
 
 ## Human quick start (local development)
 
-1. Install dependencies: `npm install`
-2. Run the dev server: `npm run dev`
-3. Open the URL shown (usually `http://localhost:5173`).
+**Prerequisites:** The OpenClaw gateway must listen on the LAN so the UI can connect from another machine. In `~/.openclaw/openclaw.json`, set `gateway.bind` to `"lan"` (use named modes: `lan`, `loopback`, `tailnet`, `auto`, `custom`—not IPs like `0.0.0.0`). Non-loopback binds require `gateway.auth.token` or `gateway.auth.password`. See [Gateway configuration](https://docs.openclaw.ai/gateway/configuration-reference). If it binds to loopback only, you’ll see WebSocket 1006 / connection refused.
 
-If the gateway runs on **another machine**, copy `.env.example` to `.env.local` and set `VITE_OPENCLAW_GATEWAY_URL` to that machine’s WebSocket URL (see **If you are OpenClaw** above). Leave `.env.local` **off** the gateway PC so production builds use the page hostname.
+1. Install dependencies: `npm install`
+2. Copy [`.env.example`](.env.example) to `.env.local` and set `VITE_OPENCLAW_GATEWAY_URL` to your gateway WebSocket URL (e.g. `ws://192.168.1.50:18789` for remote, or `ws://localhost:18789` if the gateway runs locally).
+3. If the gateway enforces auth, add `VITE_OPENCLAW_GATEWAY_TOKEN` with the same value as `OPENCLAW_GATEWAY_TOKEN` or `--token` on the gateway. See [Gateway protocol](https://docs.openclaw.ai/gateway/protocol) and [WebChat](https://docs.openclaw.ai/web/webchat) for auth and device-signing details.
+4. Run the dev server: `npm run dev`
+5. Open the URL shown (usually `http://localhost:5173`).
+
+Leave `.env.local` **off** the gateway PC when running `npm run build` so production builds use the page hostname. Set `VITE_OPENCLAW_DEBUG=1` for verbose gateway frame logging in the console.
 
 ---
 

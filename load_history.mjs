@@ -21,7 +21,7 @@ async function loadHistory() {
     }
 
     try {
-      const lines = stdout.trim().split('\\n');
+      const lines = stdout.trim().split('\n');
       const filteredHistory = [];
       let currentRole = null;
       let currentContent = '';
@@ -37,7 +37,7 @@ async function loadHistory() {
           currentRole = 'assistant';
           currentContent = trimmedLine.substring(11);
         } else if (currentRole && !trimmedLine.startsWith('System:')) {
-          currentContent += '\\n' + trimmedLine;
+          currentContent += '\n' + trimmedLine;
         }
       }
       if (currentRole) filteredHistory.push({ role: currentRole, content: currentContent.trim() });

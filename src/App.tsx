@@ -1,16 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Box, Paper, Typography, Drawer, useMediaQuery, Theme } from '@mui/material';
+import { Box, Paper, Typography, Drawer, useMediaQuery, Theme, Alert } from '@mui/material';
 import { ChatBubble } from './components/ChatBubble';
 import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtSheet } from './components/ChainOfThoughtSheet';
-import { initGatewayConnection, sendMessageToGateway } from './api/gateway';
-import conversationHistory from './history.json';
-
-// Define a more specific type for imported history
-interface HistoryMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
+import {
+  initGatewayConnection,
+  sendChatMessage,
+  fetchChatHistory,
+} from './api/gateway';
 
 export interface Message {
   id: string;
@@ -19,41 +16,45 @@ export interface Message {
   reasoning?: string;
 }
 
-// Helper to convert history to the app's message format
-const mapHistoryToMessages = (history: HistoryMessage[]): Message[] => {
+type ConnectionStatus = 'disconnected' | 'connecting' | 'ready' | 'error';
+
+function mapHistoryToMessages(
+  history: { role: string; content: string }[]
+): Message[] {
   return history.map((msg, index) => ({
     id: `hist-${index}`,
     role: msg.role === 'assistant' ? 'ai' : 'user',
     content: msg.content,
   }));
-};
+}
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeReasoning, setActiveReasoning] = useState<string>('');
   const [isThinking, setIsThinking] = useState(false);
   const [cotSheetOpen, setCotSheetOpen] = useState(false);
-  
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
   const isMobile = useMediaQuery((theme: Theme) => theme.breakpoints.down('sm'));
   const lastReasoningLine = activeReasoning.trim().split('\n').pop() || '';
 
   useEffect(() => {
-    // Load initial history
-    setMessages(mapHistoryToMessages(conversationHistory as HistoryMessage[]));
-
-    // Initialize WebSocket connection
     initGatewayConnection({
-      onMessage: (message) => console.log('Received generic message:', message),
+      onMessage: (message) => {
+        if (import.meta.env.DEV) {
+          console.log('[OpenClaw gateway] generic message:', message);
+        }
+      },
       onReasoning: (chunk) => {
         setIsThinking(true);
-        setActiveReasoning(prev => prev + chunk);
+        setActiveReasoning((prev) => prev + chunk);
       },
       onContent: (chunk) => {
         setIsThinking(false);
-        setMessages(prev => {
+        setMessages((prev) => {
           const lastMsg = prev[prev.length - 1];
           if (lastMsg && lastMsg.role === 'ai') {
-            // Append content to the last AI message
             const updatedMessages = [...prev];
             updatedMessages[updatedMessages.length - 1] = {
               ...lastMsg,
@@ -64,54 +65,88 @@ export default function App() {
           return prev;
         });
       },
+      onConnected: () => {
+        setConnectionStatus('ready');
+        setConnectionError(null);
+        fetchChatHistory()
+          .then((history) => {
+            setMessages(mapHistoryToMessages(history));
+          })
+          .catch((err) => {
+            console.error('[OpenClaw gateway] chat.history failed:', err);
+          });
+      },
+      onConnectError: (error) => {
+        setConnectionStatus('error');
+        setConnectionError(error);
+      },
     });
   }, []);
 
-  const handleSend = async (text: string) => {
+  const handleSend = (text: string) => {
     if (!text.trim()) return;
+    if (connectionStatus !== 'ready') {
+      setConnectionError('Not connected. Please wait for the gateway to connect.');
+      return;
+    }
 
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text };
-    setMessages(prev => [...prev, userMsg]);
-    
-    // Reset for new response
+    setMessages((prev) => [...prev, userMsg]);
+
     setActiveReasoning('');
     setIsThinking(true);
-    
-    // Create a placeholder for the AI's response
+
     const aiMsgId = (Date.now() + 1).toString();
-    setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '', reasoning: '' }]);
-    
-    sendMessageToGateway(text);
+    setMessages((prev) => [...prev, { id: aiMsgId, role: 'ai', content: '', reasoning: '' }]);
+
+    sendChatMessage(text);
   };
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      {/* Main Chat Area */}
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <Paper elevation={0} sx={{ p: 2, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 0 }}>
           <Typography variant="h6">OpenClaw UI</Typography>
+          {connectionStatus === 'connecting' && (
+            <Typography variant="caption" sx={{ opacity: 0.9 }}>
+              Connecting…
+            </Typography>
+          )}
+          {connectionStatus === 'error' && connectionError && (
+            <Typography variant="caption" sx={{ opacity: 0.9 }}>
+              {connectionError}
+            </Typography>
+          )}
         </Paper>
-        
+
+        {connectionError && connectionStatus === 'error' && (
+          <Alert severity="error" sx={{ m: 2 }} onClose={() => setConnectionError(null)}>
+            {connectionError}
+          </Alert>
+        )}
+
         <Box sx={{ flex: 1, overflowY: 'auto', p: isMobile ? 2 : 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {messages.map((msg) => (
             <ChatBubble key={msg.id} role={msg.role} content={msg.content} />
           ))}
           {isThinking && isMobile && (
-            <ChatBubble 
-              role="ai" 
-              content={lastReasoningLine || "Thinking..."} 
+            <ChatBubble
+              role="ai"
+              content={lastReasoningLine || 'Thinking…'}
               isThinking={true}
-              onClick={() => setCotSheetOpen(true)} 
+              onClick={() => setCotSheetOpen(true)}
             />
           )}
         </Box>
 
         <Box sx={{ p: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>
-          <MessageInput onSend={handleSend} disabled={isThinking} />
+          <MessageInput
+            onSend={handleSend}
+            disabled={isThinking || connectionStatus !== 'ready'}
+          />
         </Box>
       </Box>
 
-      {/* Reasoning Side Panel (Desktop Only) */}
       {!isMobile && (
         <Drawer
           variant="permanent"
@@ -123,15 +158,25 @@ export default function App() {
           }}
         >
           <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', bgcolor: '#f0f0f0' }}>
-            <Typography variant="subtitle1" fontWeight="bold">Chain of Thought</Typography>
+            <Typography variant="subtitle1" fontWeight="bold">
+              Chain of Thought
+            </Typography>
           </Box>
-          <Box sx={{ p: 2, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.85rem', color: '#555', whiteSpace: 'pre-wrap' }}>
-            {activeReasoning || 'Awaiting task...'}
+          <Box
+            sx={{
+              p: 2,
+              overflowY: 'auto',
+              fontFamily: 'monospace',
+              fontSize: '0.85rem',
+              color: '#555',
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {activeReasoning || 'Awaiting task…'}
           </Box>
         </Drawer>
       )}
 
-      {/* Reasoning Bottom Sheet (Mobile Only) */}
       <ChainOfThoughtSheet
         open={cotSheetOpen}
         onClose={() => setCotSheetOpen(false)}
