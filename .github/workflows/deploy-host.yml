@@ -21,9 +21,9 @@ jobs:
           npm ci
           npm run build
 
+  # Job-level `if` cannot use `secrets.*` (GitHub restriction). Pass secrets into env and skip in the shell.
   notify-host:
     needs: verify
-    if: ${{ secrets.DEPLOY_WEBHOOK_URL != '' && secrets.DEPLOY_WEBHOOK_SECRET != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Trigger deploy webhook
@@ -31,6 +31,10 @@ jobs:
           URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
           SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
         run: |
+          if [ -z "$URL" ] || [ -z "$SECRET" ]; then
+            echo "Skipping deploy webhook: set DEPLOY_WEBHOOK_URL and DEPLOY_WEBHOOK_SECRET in repo Actions secrets."
+            exit 0
+          fi
           curl -fsS -X POST \
             -H "Authorization: Bearer ${SECRET}" \
             "${URL}"

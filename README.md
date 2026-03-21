@@ -27,7 +27,7 @@ A dedicated PWA web interface for OpenClaw.
   `DEPLOY_WEBHOOK_SECRET=<that-string>`  
   Optional: `WEBHOOK_LISTEN_PORT=8788` (default).
 - **Ask the human to:** In **GitHub → this repository → Settings → Secrets and variables → Actions → New repository secret**, add **`DEPLOY_WEBHOOK_SECRET`** with the **same** string.  
-  **Important:** Do this **now**, not “later after Actions.” If this secret is missing, pushes to `main` will **never** call the host even when CI passes.
+  **Important:** Do this **now**, not “later after Actions.” If **`DEPLOY_WEBHOOK_SECRET`** or **`DEPLOY_WEBHOOK_URL`** is missing, the **notify** job still runs but **skips** the HTTP call and the workflow stays **green**—so missing secrets are easy to miss unless you read the **notify-host** job log.
 
 **3 — Webhook listener**
 
@@ -61,8 +61,8 @@ ingress:
 **5 — Prove the tunnel, then set the URL secret**
 
 - **OpenClaw:** With tunnel + **`webhook:deploy`** running, open or `curl` **`https://<their-hostname>/health`** — body must be **`ok`**. If this fails, **do not** continue.
-- **Ask the human to:** In **GitHub → Settings → Secrets and variables → Actions**, add **`DEPLOY_WEBHOOK_URL`** = **`https://<their-hostname>/deploy`** (must include the **`/deploy`** path; GitHub Actions POSTs here).  
-  **Both** **`DEPLOY_WEBHOOK_SECRET`** and **`DEPLOY_WEBHOOK_URL`** must exist or the notify job is **skipped** while CI still looks green.
+- **Ask the human to:** In **GitHub → Settings → Secrets and variables → Actions**, add **`DEPLOY_WEBHOOK_URL`** = **`https://<their-hostname>/deploy`** (must include the **`/deploy`** path).  
+  **Both** secrets must be set for **`curl`** to run. (GitHub does **not** allow `secrets` in a **job-level** `if`, so the workflow checks inside the step and prints **“Skipping deploy webhook…”** when either secret is empty.)
 
 **6 — Optional: smoke-test POST**
 
@@ -82,10 +82,13 @@ ingress:
 
 ### After setup: each push to `main`
 
-1. [`.github/workflows/deploy-host.yml`](.github/workflows/deploy-host.yml) runs **`npm ci`** + **`npm run build`** on GitHub. If it **fails**, fix the build first—the host is not notified.  
-2. If **both** Action secrets are set, GitHub **POSTs** **`DEPLOY_WEBHOOK_URL`** with **`Authorization: Bearer`** `DEPLOY_WEBHOOK_SECRET`.  
-3. On the host, **tunnel**, **`npm run webhook:deploy`**, and **`serve`** (4173) should still be running. The listener runs **`npm run deploy:local`** (`git reset --hard origin/main`, etc.).  
-4. Stale PWA: suggest hard refresh.
+1. [`.github/workflows/deploy-host.yml`](.github/workflows/deploy-host.yml) runs **`verify`** (`npm ci` + `npm run build`). If it **fails**, fix the build first—the host is not notified.  
+2. Job **`notify-host`** always runs after **verify**. Open its log → step **“Trigger deploy webhook”**: either **`curl`** ran (secrets set) or **“Skipping deploy webhook…”** (one or both secrets missing—workflow is still green).  
+3. When **`curl`** runs, it **POSTs** **`DEPLOY_WEBHOOK_URL`** with **`Authorization: Bearer`** `DEPLOY_WEBHOOK_SECRET`.  
+4. On the host, **tunnel**, **`npm run webhook:deploy`**, and **`serve`** (4173) should still be running. The listener runs **`npm run deploy:local`** (`git reset --hard origin/main`, etc.).  
+5. Stale PWA: suggest hard refresh.
+
+**OpenClaw (workflow edits):** Never add **`if: ${{ secrets.… }}`** on a **job**—GitHub rejects it. Optional notify logic belongs in a **step** (this repo uses a shell check + skip message).
 
 ---
 
@@ -100,7 +103,7 @@ On the host: **`scripts\deploy-local.cmd`** or **`npm run deploy:local`** (disca
 | Symptom | Check |
 |--------|--------|
 | **`Cannot unmarshal !!str 'http…'`** in cloudflared | `ingress` rules each start with **`-`**; **`credentials-file`** uses **`/`** not `\`; catch‑all **`http_status:404`** present. |
-| CI green but host never updates | **`DEPLOY_WEBHOOK_URL`** *and* **`DEPLOY_WEBHOOK_SECRET`** in GitHub; **`/health`** works over **HTTPS**; webhook process + tunnel running. |
+| CI green but host never updates | Open **notify-host** → if log says **Skipping deploy webhook**, set **both** Action secrets. If **`curl`** ran, check tunnel, **`webhook:deploy`**, and **`/health`**. |
 | **401** on POST | Bearer secret ≠ **`.env.webhook`**. |
 | UI won’t connect to agent | Gateway up; dev **`.env.local`**; firewall / bind **18789** on LAN. |
 | UI stale on host | **`serve`** serving **this** repo’s **`dist/`**; run **`deploy-local`**; PWA cache. |
