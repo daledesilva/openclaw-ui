@@ -104,8 +104,9 @@ On the host: **`scripts\deploy-local.cmd`** or **`npm run deploy:local`** (disca
 |--------|--------|
 | **`Cannot unmarshal !!str 'http…'`** in cloudflared | `ingress` rules each start with **`-`**; **`credentials-file`** uses **`/`** not `\`; catch‑all **`http_status:404`** present. |
 | CI green but host never updates | Open **notify-host** → if log says **Skipping deploy webhook**, set **both** Action secrets. If **`curl`** ran, check tunnel, **`webhook:deploy`**, and **`/health`**. |
-| **notify-host failed** (curl exit **22** / HTTP **524**) | **524** = proxy timed out waiting for the response; this repo’s webhook now returns **202** immediately and builds in the **background**—redeploy **`webhook:deploy`** from latest `main`. Other codes: log shows **body** + **status**. **401** = secret mismatch; **404** = bad URL/path; **429** = overlapping deploy. **500** = rare spawn error before background run. |
-| **401** on POST | Bearer secret ≠ **`.env.webhook`**. |
+| **notify-host failed** (HTTP **502**) | **Tunnel reached Cloudflare but not your app.** On the gateway PC: (1) **`npm run webhook:deploy`** running and listening on **127.0.0.1:8788**; (2) **`cloudflared tunnel run …`** running; (3) **`config.yml`** `ingress` **`service:`** is **`http://127.0.0.1:8788`** (same port). Test locally: **`curl http://127.0.0.1:8788/health`** → **`ok`**. Start **webhook** before or with **cloudflared**. |
+| **524** / slow notify | Webhook returns **202** quickly; if you still see **524**, pull latest **`webhook-deploy.mjs`** and restart **`webhook:deploy`**. |
+| Other notify errors | **401** = Bearer secret ≠ **`.env.webhook`**; **404** URL/path; **429** overlapping deploy. Workflow retries **502/503/504** a few times. |
 | UI won’t connect to agent | Gateway up; dev **`.env.local`**; firewall / bind **18789** on LAN. |
 | UI stale on host | **`serve`** serving **this** repo’s **`dist/`**; run **`deploy-local`**; PWA cache. |
 
