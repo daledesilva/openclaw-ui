@@ -11,7 +11,7 @@ export default defineConfig({
         name: 'OpenClaw UI',
         short_name: 'OpenClaw',
         description: 'Web interface for OpenClaw AI',
-        theme_color: '#ffffff',
+        theme_color: '#7C3AED',
         icons: [
           {
             src: 'pwa-192x192.png',
