@@ -1,11 +1,20 @@
-import { Message } from '../App';
-
 let socket: WebSocket | null = null;
 let onMessageCallback: ((message: any) => void) | null = null;
 let onReasoningCallback: ((chunk: string) => void) | null = null;
 let onContentCallback: ((chunk: string) => void) | null = null;
 
-const GATEWAY_URL = `ws://${window.location.hostname}:18789`;
+/** Same host as the page (ws / wss matches the page). Use when the UI is served from the OpenClaw machine. */
+function defaultGatewayWebSocketUrl(): string {
+  const { protocol, hostname } = window.location;
+  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${wsProtocol}//${hostname}:18789`;
+}
+
+function gatewayWebSocketUrl(): string {
+  const fromEnv = import.meta.env.VITE_OPENCLAW_GATEWAY_URL?.trim();
+  if (fromEnv) return fromEnv;
+  return defaultGatewayWebSocketUrl();
+}
 
 function connect() {
   if (socket && socket.readyState === WebSocket.OPEN) {
@@ -13,7 +22,9 @@ function connect() {
     return;
   }
 
-  socket = new WebSocket(GATEWAY_URL);
+  const url = gatewayWebSocketUrl();
+  console.log('OpenClaw gateway WebSocket:', url);
+  socket = new WebSocket(url);
 
   socket.onopen = () => {
     console.log('WebSocket connection established.');

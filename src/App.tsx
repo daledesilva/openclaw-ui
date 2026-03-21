@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Box, Paper, Typography, Drawer, useMediaQuery, Theme } from '@mui/material';
 import { ChatBubble } from './components/ChatBubble';
 import { MessageInput } from './components/MessageInput';
