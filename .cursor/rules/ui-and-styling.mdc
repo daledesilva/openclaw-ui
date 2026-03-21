@@ -1,0 +1,37 @@
+---
+description: UI and styling conventions — MUI theme, no hardcoded design tokens
+globs: **/*.{tsx,jsx,ts,js}
+alwaysApply: false
+---
+
+# UI and Styling
+
+## Use MUI Theme and Tokens
+
+Pull visual values from **MUI's theme** — palette, spacing, typography, breakpoints, shape — instead of hardcoding hex colors or magic pixel values.
+
+```tsx
+// ❌ BAD
+<Box sx={{ color: '#3a86ff', p: '13px' }} />
+
+// ✅ GOOD
+<Box sx={{ color: 'primary.main', p: 2 }} />
+```
+
+Use `useTheme()` when you need theme values in logic (e.g. media queries with `theme.breakpoints`).
+
+## Prefer `sx` and MUI Primitives
+
+Use MUI layout and input primitives (`Box`, `Stack`, `Typography`, `Paper`, etc.) and the **`sx` prop** for one-off layout and responsive rules. Use **`styled`** from `@mui/material/styles` when a style variant is reused across multiple instances.
+
+## No Inline Styles Except Truly Dynamic Values
+
+Avoid raw `style={{}}` on DOM elements. Exceptions: values that must be computed at runtime and cannot be expressed with theme tokens or `sx` (e.g. dynamic height from measurements).
+
+## Do Not Introduce Another CSS Framework
+
+This project uses **MUI + Emotion**. Do not add Tailwind, styled-components, or CSS-in-JS libraries alongside MUI without an explicit decision to migrate.
+
+## Markdown and User Content
+
+Rich message rendering lives in components like `MarkdownMessage` with **sanitize** pipeline (`rehype-sanitize`). When changing markdown or HTML rendering, preserve sanitization and accessibility (headings, links, contrast).

@@ -1,0 +1,46 @@
+---
+description: Kotlin coding style — data classes, JSON serialization, logging (not used in this repo; kept for shared template parity)
+globs: **/*.kt
+alwaysApply: false
+---
+
+# Kotlin Coding Style
+
+## Use Data Classes for Value Objects
+
+Use `data class` for message types, DTOs, and any type whose primary purpose is holding data. This ensures correct `equals`, `hashCode`, and `copy` behaviour automatically.
+
+```kotlin
+// ✅ GOOD
+data class StrokeMessage(val id: String, val points: List<Point>, val timestamp: Long)
+```
+
+## JSON Serialization: Use Gson
+
+Use Gson for all JSON serialization and deserialization. Do not introduce `kotlinx.serialization` or Moshi unless the project already uses them.
+
+Create a new `Gson()` instance per call site. Do not share a singleton instance across the codebase — Gson instances are not designed for shared mutable use.
+
+```kotlin
+// ✅ GOOD
+val json = Gson().toJson(message)
+val parsed = Gson().fromJson(json, StrokeMessage::class.java)
+```
+
+## Logging: Use android.util.Log
+
+Use `android.util.Log` for all logging. Do not introduce Timber or other logging libraries unless the project already uses them.
+
+```kotlin
+// ✅ GOOD
+Log.d(TAG, "Connection established")
+Log.e(TAG, "Failed to parse message", exception)
+```
+
+Define a `TAG` constant at the top of each class:
+
+```kotlin
+companion object {
+    private const val TAG = "MyClassName"
+}
+```

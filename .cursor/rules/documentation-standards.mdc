@@ -1,0 +1,32 @@
+---
+description: Documentation structure, content, and format standards
+alwaysApply: true
+---
+
+# Documentation Standards
+
+## Location
+
+Store documentation in a `docs/` folder. Organise into separate pages per concept or feature — do not combine unrelated topics in one file.
+
+The **README** at the repo root is the primary operator playbook for deploy, webhooks, and gateway setup; keep it authoritative for those flows. Add `docs/` for deeper design or troubleshooting when needed.
+
+## Structure
+
+Every documentation page should follow this order:
+
+1. **Why it exists** — the motivation and problem being solved
+2. **Conceptual understanding** — mental model before implementation details
+3. **Flows** — how data or control moves through the system
+4. **Technical details** — implementation specifics
+5. **Technical Gotchas** — a dedicated section for non-obvious pitfalls
+
+## Format
+
+- Use Mermaid diagrams for flows and architecture — prefer over ASCII art or prose descriptions
+- Lead with context before specifics
+- Keep a "Technical Gotchas" section in any page covering complex or surprising behaviour
+
+## Planning
+
+The final step of every plan must be creating or updating the relevant documentation.

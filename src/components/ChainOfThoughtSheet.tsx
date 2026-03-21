@@ -1,5 +1,6 @@
 import React from 'react';
 import { SwipeableDrawer, Box, Typography, styled } from '@mui/material';
+import { sanitizeDisplayText } from '../utils/sanitizeDisplayText';
 
 const StyledBox = styled(Box)(({ theme }) => ({
   padding: theme.spacing(2, 2, 4, 2),
@@ -26,6 +27,7 @@ interface ChainOfThoughtSheetProps {
 }
 
 export const ChainOfThoughtSheet: React.FC<ChainOfThoughtSheetProps> = ({ open, onClose, onOpen, reasoning }) => {
+  const safe = sanitizeDisplayText(reasoning || '');
   return (
     <SwipeableDrawer
       anchor="bottom"
@@ -57,7 +59,7 @@ export const ChainOfThoughtSheet: React.FC<ChainOfThoughtSheetProps> = ({ open, 
             wordWrap: 'break-word',
           }}
         >
-          {reasoning || 'Awaiting task...'}
+          {safe || 'Awaiting task...'}
         </Box>
       </StyledBox>
     </SwipeableDrawer>

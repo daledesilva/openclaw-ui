@@ -1,0 +1,34 @@
+---
+description: Vite/React PWA — scripts, build verification, do not auto-start dev servers
+alwaysApply: true
+---
+
+# Vite / React / PWA (this repo)
+
+This project is a **browser** SPA (not React Native). Use the npm scripts defined in `package.json`.
+
+## Scripts
+
+| Script | Use |
+|---|---|
+| `npm run dev` | Vite dev server (default port **5173**) |
+| `npm run build` | `tsc` + production Vite build → **`dist/`** |
+| `npm run preview` | Serve **`dist/`** locally (default **4173**) |
+| `npm run deploy:local` | Host pull + `npm ci` + `npm run build` (used by webhook) |
+| `npm run webhook:deploy` | Start deploy webhook listener on the gateway host |
+
+## Build Failure Protocol
+
+If `npm run build` fails:
+
+1. Read the full **TypeScript** and **Vite** output to find the root cause
+2. Fix the issue
+3. Re-run **`npm run build`** — do not leave a broken build
+
+## PWA / Service Worker
+
+`vite-plugin-pwa` may cache assets. When debugging stale UI, factor in SW caching; a hard refresh or adjusted dev workflow may be needed.
+
+## Do Not Start Servers Unless Asked
+
+Do not run `npm run dev`, `npm run preview`, or `npm run webhook:deploy` as part of routine tasks unless the user explicitly requests it. Starting servers is the user's responsibility.

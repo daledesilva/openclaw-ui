@@ -20,11 +20,12 @@ jobs:
           node-version: '24'
           cache: npm
 
-      - name: Install and build
+      - name: Install, test, and build
         env:
           VITE_BUILD_REV: ${{ github.run_number }}
         run: |
           npm ci
+          npm test
           npm run build
 
   # Job-level `if` cannot use `secrets.*` (GitHub restriction). Pass secrets into env and skip in the shell.

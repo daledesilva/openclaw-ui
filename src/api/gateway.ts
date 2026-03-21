@@ -4,6 +4,16 @@ import {
   isDeviceSigningAvailable,
 } from './device-auth';
 import { VITE_APP_VERSION_FULL } from '../appVersion';
+import {
+  type ChatHistoryResponse,
+  type FetchedChatMessage,
+  type RawHistoryMessage,
+  extractStreamText,
+  mapRawHistoryMessage,
+  parseAssistantDisplayPayload,
+} from './gateway-types';
+
+export type { FetchedChatMessage } from './gateway-types';
 
 const LOG = '[OpenClaw gateway]';
 const DEBUG = import.meta.env.VITE_OPENCLAW_DEBUG === '1' || import.meta.env.DEV;
@@ -37,9 +47,16 @@ let onReasoningCallback: ((chunk: string) => void) | null = null;
 let onContentCallback: ((chunk: string) => void) | null = null;
 let onConnectedCallback: (() => void) | null = null;
 let onConnectErrorCallback: ((error: string) => void) | null = null;
+let onAssistantFinalCallback: ((payload: ReturnType<typeof parseAssistantDisplayPayload>) => void) | null =
+  null;
 
 const pendingReqs = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 let connectReqId: string | null = null;
+
+/** Set from connect hello `snapshot.sessionDefaults.mainSessionKey` when env override is unset */
+let resolvedMainSessionKey: string | null = null;
+
+const ROUTINE_EVENTS = new Set(['health', 'tick', 'heartbeat', 'presence']);
 
 /** Same host as the page (ws / wss matches the page). Use when the UI is served from the OpenClaw machine. */
 function defaultGatewayWebSocketUrl(): string {
@@ -56,7 +73,9 @@ function gatewayWebSocketUrl(): string {
 
 function sessionKey(): string {
   const fromEnv = import.meta.env.VITE_OPENCLAW_SESSION_KEY?.trim();
-  return fromEnv || 'main';
+  if (fromEnv) return fromEnv;
+  if (resolvedMainSessionKey) return resolvedMainSessionKey;
+  return 'main';
 }
 
 const TOKEN_STORAGE_KEY = 'openclaw-gateway-token';
@@ -102,6 +121,8 @@ function connect() {
     console.log(`${LOG} already connected`);
     return;
   }
+
+  resolvedMainSessionKey = null;
 
   const url = gatewayWebSocketUrl();
   console.log(`${LOG} connecting to`, url);
@@ -213,6 +234,11 @@ function connect() {
         connectReqId = null;
         handshakeComplete = true;
         if (res.ok) {
+          const hello = res.payload as {
+            snapshot?: { sessionDefaults?: { mainSessionKey?: string } };
+          };
+          const mainKey = hello?.snapshot?.sessionDefaults?.mainSessionKey?.trim();
+          if (mainKey) resolvedMainSessionKey = mainKey;
           console.log(`${LOG} handshake ok, connected`);
           onConnectedCallback?.();
         } else {
@@ -241,6 +267,11 @@ function connect() {
         }
         return;
       }
+
+      if (DEBUG && res.ok === false) {
+        console.warn(`${LOG} unmatched res error id=${res.id}`, res.error);
+      }
+      return;
     }
 
     if (t === 'event' && ev === 'chat') {
@@ -257,7 +288,7 @@ function connect() {
         if (p?.stream === 'reasoning' && typeof p?.data?.text === 'string') {
           onReasoningCallback?.(p.data.text);
         }
-      } else {
+      } else if (ev && !ROUTINE_EVENTS.has(ev)) {
         logUnhandled(data);
       }
       onMessageCallback?.(data);
@@ -306,19 +337,22 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
 
   if (state === 'delta' || state === 'final') {
     if (message !== undefined && message !== null) {
-      if (typeof message === 'string') {
-        onContentCallback?.(message);
-      } else if (typeof message === 'object' && message !== null && 'text' in message && typeof (message as { text: string }).text === 'string') {
-        onContentCallback?.((message as { text: string }).text);
-      } else if (typeof message === 'object' && message !== null) {
-        if (DEBUG) {
-          console.log(`${LOG} chat message shape:`, JSON.stringify(message, null, 2));
-        }
-        const m = message as Record<string, unknown>;
-        if (typeof m.content === 'string') onContentCallback?.(m.content);
-        else if (typeof m.text === 'string') onContentCallback?.(m.text);
+      const text = extractStreamText(message);
+      if (text) {
+        onContentCallback?.(text);
+      } else if (DEBUG && typeof message === 'object' && message !== null) {
+        console.log(`${LOG} chat message shape:`, JSON.stringify(message, null, 2));
       }
     }
+  }
+
+  if (state === 'final' && message !== undefined && message !== null) {
+    onAssistantFinalCallback?.(
+      parseAssistantDisplayPayload(message, {
+        errorMessage,
+        role: 'assistant',
+      })
+    );
   }
 
   if (state === 'final' || state === 'aborted' || state === 'error') {
@@ -363,35 +397,49 @@ export function sendMessageToGateway(message: string) {
   sendChatMessage(message);
 }
 
-export function fetchChatHistory(limit = 100): Promise<{ role: string; content: string }[]> {
-  return sendReq<{ messages?: { role?: string; content?: string }[] } | { role?: string; content?: string }[]>('chat.history', {
+export function fetchChatHistory(limit = 100): Promise<FetchedChatMessage[]> {
+  return sendReq<ChatHistoryResponse | RawHistoryMessage[]>('chat.history', {
     sessionKey: sessionKey(),
     limit,
   }).then((res) => {
-    const list = Array.isArray(res) ? res : (res as { messages?: unknown[] })?.messages ?? [];
-    return (list as { role?: string; content?: string }[]).map((m) => ({
-      role: (m?.role ?? 'user').toLowerCase(),
-      content: typeof m?.content === 'string' ? m.content : String(m?.content ?? ''),
-    }));
+    const list = Array.isArray(res) ? res : (res?.messages ?? []);
+    return (list as RawHistoryMessage[]).map((m) => mapRawHistoryMessage(m));
   });
+}
+
+/** Close the socket and reject in-flight requests (e.g. React StrictMode cleanup). */
+export function disconnectGateway(): void {
+  for (const [, pending] of pendingReqs) {
+    pending.reject(new Error('Disconnected'));
+  }
+  pendingReqs.clear();
+  const ws = socket;
+  socket = null;
+  connectReqId = null;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    ws.close(1000, 'client');
+  }
 }
 
 export function initGatewayConnection({
   onMessage,
   onReasoning,
   onContent,
+  onAssistantFinal,
   onConnected,
   onConnectError,
 }: {
   onMessage: (message: unknown) => void;
   onReasoning: (chunk: string) => void;
   onContent: (chunk: string) => void;
+  onAssistantFinal?: (payload: ReturnType<typeof parseAssistantDisplayPayload>) => void;
   onConnected?: () => void;
   onConnectError?: (error: string) => void;
 }) {
   onMessageCallback = onMessage;
   onReasoningCallback = onReasoning;
   onContentCallback = onContent;
+  onAssistantFinalCallback = onAssistantFinal ?? null;
   onConnectedCallback = onConnected ?? null;
   onConnectErrorCallback = onConnectError ?? null;
   connect();

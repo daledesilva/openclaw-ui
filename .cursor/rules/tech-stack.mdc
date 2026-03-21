@@ -1,0 +1,19 @@
+---
+description: Tech stack — libraries, frameworks, and tools in use
+alwaysApply: true
+---
+
+# Tech Stack
+
+This file is the source of truth for the libraries, frameworks, and tools used in this project. **Keep it up to date — updating this file is the final step of every plan that introduces, removes, or changes a dependency or tool.**
+
+---
+
+- **Frontend:** React 18, TypeScript, Vite 5
+- **UI:** MUI (Material UI) v5, Emotion (`@emotion/react`, `@emotion/styled`)
+- **Content:** `react-markdown`, `remark-gfm`, `rehype-sanitize`
+- **Realtime:** WebSocket client via `ws` types / browser WebSocket (see `src/api/gateway.ts`)
+- **PWA:** `vite-plugin-pwa`
+- **Host / deploy tooling:** Node scripts (`webhook-deploy.mjs`), Express types for optional local tooling
+- **Testing:** Vitest (`npm run test`); verify with `npm run build` (includes `tsc`) for typecheck and production bundle
+- **Build / CI:** GitHub Actions (`deploy-host` workflow), local `npm run deploy:local`

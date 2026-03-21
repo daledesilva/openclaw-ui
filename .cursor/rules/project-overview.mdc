@@ -1,0 +1,33 @@
+---
+description: Project overview — purpose, folder structure, and architecture
+alwaysApply: true
+---
+
+# Project Overview
+
+## What This Project Is
+
+**openclaw-ui** is a PWA web UI for OpenClaw: chat with the gateway over WebSockets, served as static **`dist/`** beside the gateway or via `vite preview` / a static host. It targets browsers (desktop and mobile), not native app stores.
+
+## Folder Structure
+
+```
+src/                    — React + TypeScript UI (components, hooks, API client)
+src/api/                — Gateway WebSocket client and types
+src/components/         — Feature UI (chat, markdown, sheets, setup)
+scripts/                — Deploy webhook and host helpers (see README)
+public/                 — Static assets for Vite
+docs/                   — Project documentation (create when adding formal docs)
+```
+
+## Architecture Notes
+
+- The UI is a **Vite** SPA that connects to the **OpenClaw gateway** via **`VITE_OPENCLAW_GATEWAY_URL`** (WebSocket). There is no app-owned REST API in this repo.
+- **Production** builds are often served from the same machine as the gateway; relative WebSocket URLs work when `VITE_OPENCLAW_GATEWAY_URL` is unset at build time.
+- **GitHub Actions** can notify a host **`webhook:deploy`** listener, which runs **`deploy:local`** (fetch, `npm ci`, `npm run build`). See README for tunnel and secrets.
+
+## Key Constraints
+
+- **Do not** set `VITE_OPENCLAW_GATEWAY_URL` on production builds on the gateway host unless you intentionally want a fixed WS URL in the bundle.
+- Gateway **Origin** checks: dev UIs on another machine may need `gateway.controlUi.allowedOrigins` updated on the gateway (README).
+- **Client env vars** (`VITE_*`) are exposed in the browser bundle; treat secrets accordingly (LAN/dev tokens only as documented).

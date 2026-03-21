@@ -1,0 +1,23 @@
+---
+description: Env file update conventions — root Vite and webhook env files
+alwaysApply: true
+---
+
+# Environment File Conventions
+
+## Location (this repo)
+
+This is a **single-package** Vite app at the repo root. Env files live **here**, not in a `client/` subfolder:
+
+| File | Purpose |
+|---|---|
+| `.env.local` | Local dev overrides (gitignored). Typical: `VITE_OPENCLAW_GATEWAY_URL`, optional `VITE_OPENCLAW_GATEWAY_TOKEN`, etc. |
+| `.env.example` | Documented template for all **Vite** (`VITE_*`) variables developers may set |
+| `.env.webhook` | **Host only**, gitignored: `DEPLOY_WEBHOOK_SECRET` and optional webhook listener settings (see README) |
+
+Do not commit secrets. `.env.example` may document host-only variables in comments (as it does for the webhook) without real secret values.
+
+## Updating Variables
+
+- When adding or changing a **`VITE_*`** variable, update **`.env.example`** in the same change and describe it in README if operators need to know.
+- For webhook/deploy secrets, follow README: `.env.webhook` on the gateway machine and matching GitHub Actions secrets.

@@ -1,0 +1,15 @@
+---
+description: Maintain both Cursor and GitHub Copilot rules with consistency
+alwaysApply: true
+---
+
+# AI Instruction Rules
+
+When adding or updating any convention or coding standard, always update **both** locations so they never diverge:
+
+| Rule type | Cursor file | Copilot file |
+|---|---|---|
+| Repo-wide / always-apply | `.cursor/rules/*.mdc` | `.github/copilot-instructions.md` |
+| File-scoped | `.cursor/rules/*.mdc` (with `globs:`) | `.github/instructions/*.instructions.md` (with `applyTo:`) |
+
+Express the same intent in both formats. Adapt the format to each tool's conventions, but never allow them to conflict.

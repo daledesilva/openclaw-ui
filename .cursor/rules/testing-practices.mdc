@@ -1,0 +1,28 @@
+---
+description: Testing and verification — Vitest for units, build for integration
+alwaysApply: true
+---
+
+# Testing Practices
+
+## Current State
+
+- **Unit tests:** **`npm run test`** runs **Vitest** (`*.test.ts` under `src/`).
+- **Typecheck + bundle:** **`npm run build`** runs `tsc` and the Vite production build.
+- There is **no e2e** runner yet. For UI or WebSocket behaviour, describe manual verification when automation does not cover it.
+
+## New code and tests
+
+Meaningful parsing or logic changes should include **unit tests** where practical. Do not consider a task complete without running **`npm run test`** and **`npm run build`** when the change touches tested areas or TypeScript.
+
+## Tests Must Be Run and Verified
+
+Run tests to completion and confirm they pass. Do not assume a test will pass without running it.
+
+## Mock Only Uncontrollable Dependencies
+
+Mock only dependencies that are genuinely impossible to control in a test environment (e.g. third-party APIs, hardware, external services with no local equivalent). Do not mock things simply because they are inconvenient — prefer real implementations where possible.
+
+## Never Start Services
+
+Never start the dev server, preview server, webhook listener, or gateway as part of a task unless the user explicitly asks. Starting long-running processes is the user's responsibility. If verification requires a running gateway, say so clearly instead of assuming it is already up.

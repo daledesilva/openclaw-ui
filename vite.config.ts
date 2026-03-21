@@ -4,6 +4,10 @@ import { VitePWA } from 'vite-plugin-pwa';
 import { appVersionPlugin } from './vite-plugin-app-version';
 
 export default defineConfig({
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+  },
   plugins: [
     appVersionPlugin(),
     react(),

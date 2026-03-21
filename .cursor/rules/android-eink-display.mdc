@@ -1,0 +1,53 @@
+---
+description: eInk and low-refresh-rate display constraints — not applicable to this web repo; kept for shared template parity
+globs: **/*.{kt,xml}
+alwaysApply: false
+---
+
+# Android eInk / Low-Refresh-Rate Display Constraints
+
+> **openclaw-ui** is a web app; this rule applies only if you add Android Kotlin/XML sources. Skip otherwise.
+
+eInk screens refresh slowly and produce visible ghosting artefacts when animations or transitions are used. **Never use any animation or transition** in code targeting eInk or low-refresh-rate displays.
+
+## Prohibited APIs
+
+Do not use any of the following:
+
+- `animate()` (View property animator)
+- `ObjectAnimator`
+- `ValueAnimator`
+- `ViewPropertyAnimator`
+- `Transition` / `TransitionManager`
+- `MotionLayout`
+- `animateLayoutChanges="true"` in XML layouts
+- Non-zero `windowAnimationStyle` in themes
+
+## Dialog Animations
+
+Always explicitly disable dialog window animations:
+
+```kotlin
+dialog.window?.setWindowAnimations(0)
+```
+
+## Activity Transitions
+
+Always cancel activity enter/exit transitions immediately after starting an activity:
+
+```kotlin
+startActivity(intent)
+overridePendingTransition(0, 0)
+```
+
+## Layout Changes
+
+In any XML layout file, ensure `animateLayoutChanges` is not set to `true`:
+
+```xml
+<!-- ❌ BAD -->
+<LinearLayout android:animateLayoutChanges="true" ... />
+
+<!-- ✅ GOOD — omit the attribute entirely or set to false -->
+<LinearLayout ... />
+```
