@@ -8,7 +8,9 @@ import {
   findLastAssistantIndex,
   foldFetchedHistoryToMessages,
   formatThoughtItemsForModal,
+  findLastHistoricalChainOfThought,
   mergeAssistantFinalIntoMessages,
+  thoughtItemsToModalSegments,
   withReasoningTraceBeforeLastAssistant,
 } from './recentThoughtsReducer';
 
@@ -273,5 +275,87 @@ describe('formatThoughtItemsForModal', () => {
     expect(text).toContain('• a()');
     expect(text).toContain('think');
     expect(text).toContain('final prose');
+  });
+});
+
+describe('thoughtItemsToModalSegments', () => {
+  it('returns empty when no items and no prose', () => {
+    expect(thoughtItemsToModalSegments([])).toEqual([]);
+    expect(thoughtItemsToModalSegments([], '  ')).toEqual([]);
+  });
+
+  it('merges adjacent reasoningChunk into one segment', () => {
+    expect(
+      thoughtItemsToModalSegments([
+        { kind: 'reasoningChunk', text: 'a' },
+        { kind: 'reasoningChunk', text: 'b' },
+      ])
+    ).toEqual([{ kind: 'reasoning', text: 'ab' }]);
+  });
+
+  it('separates tools and merges reasoning between them', () => {
+    expect(
+      thoughtItemsToModalSegments([
+        { kind: 'toolHint', label: 'x()' },
+        { kind: 'reasoningChunk', text: 'why ' },
+        { kind: 'reasoningChunk', text: 'so' },
+        { kind: 'toolResult', summary: 'ok' },
+      ])
+    ).toEqual([
+      { kind: 'toolHint', text: 'x()' },
+      { kind: 'reasoning', text: 'why so' },
+      { kind: 'toolResult', text: 'ok' },
+    ]);
+  });
+
+  it('appends prose as final segment', () => {
+    expect(
+      thoughtItemsToModalSegments([{ kind: 'toolHint', label: 't' }], '  epilogue  ')
+    ).toEqual([
+      { kind: 'toolHint', text: 't' },
+      { kind: 'prose', text: 'epilogue' },
+    ]);
+  });
+
+  it('allows prose-only when items empty', () => {
+    expect(thoughtItemsToModalSegments([], 'only prose')).toEqual([
+      { kind: 'prose', text: 'only prose' },
+    ]);
+  });
+});
+
+describe('findLastHistoricalChainOfThought', () => {
+  it('returns structured for last reasoningTrace with items', () => {
+    const r = findLastHistoricalChainOfThought([
+      { id: '1', role: 'user', content: 'hi' },
+      {
+        id: 't',
+        role: 'ai',
+        kind: 'reasoningTrace',
+        content: '',
+        thoughtItems: [{ kind: 'toolHint', label: 'a' }],
+      },
+      { id: '2', role: 'ai', kind: 'assistant', content: 'ok' },
+    ]);
+    expect(r).toEqual({
+      kind: 'structured',
+      thoughtItems: [{ kind: 'toolHint', label: 'a' }],
+    });
+  });
+
+  it('returns plain for legacy assistant reasoning', () => {
+    const r = findLastHistoricalChainOfThought([
+      { id: '1', role: 'user', content: 'hi' },
+      { id: '2', role: 'ai', kind: 'assistant', content: 'ok', reasoning: '  legacy  ' },
+    ]);
+    expect(r).toEqual({ kind: 'plain', text: '  legacy  ' });
+  });
+
+  it('prefers later trace over earlier assistant reasoning', () => {
+    const r = findLastHistoricalChainOfThought([
+      { id: 'a', role: 'ai', kind: 'assistant', content: 'x', reasoning: 'old' },
+      { id: 't', role: 'ai', kind: 'reasoningTrace', content: '', thoughtItems: [{ kind: 'toolHint', label: 'z' }] },
+    ]);
+    expect(r?.kind).toBe('structured');
   });
 });

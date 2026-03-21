@@ -1,11 +1,10 @@
-import React, { useMemo } from 'react';
-import { Box, Paper, Typography, Button } from '@mui/material';
+import React from 'react';
+import { Box, Paper, Button } from '@mui/material';
 import { styled } from '@mui/material/styles';
-import { sanitizeDisplayText } from '../utils/sanitizeDisplayText';
 import type { ThoughtItem } from '../chatThreadTypes';
 
 const TracePaper = styled(Paper)(({ theme }) => ({
-  padding: theme.spacing(1.5, 2),
+  padding: theme.spacing(1, 1.5),
   maxWidth: '85%',
   width: '100%',
   minWidth: 0,
@@ -18,7 +17,6 @@ const TracePaper = styled(Paper)(({ theme }) => ({
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'stretch',
-  gap: theme.spacing(1),
 }));
 
 export interface ReasoningTraceBubbleProps {
@@ -27,38 +25,26 @@ export interface ReasoningTraceBubbleProps {
   onViewFullReasoning?: () => void;
 }
 
-function toolListLines(items: ThoughtItem[]): string[] {
-  const lines: string[] = [];
-  for (const item of items) {
-    if (item.kind === 'toolHint') lines.push(item.label);
-    else if (item.kind === 'toolResult') lines.push(`Result: ${item.summary}`);
-  }
-  return lines;
-}
-
-function joinedReasoningChunks(items: ThoughtItem[]): string {
-  return items
-    .filter((i): i is Extract<ThoughtItem, { kind: 'reasoningChunk' }> => i.kind === 'reasoningChunk')
-    .map((i) => i.text)
-    .join('');
+function traceHasDisplayableContent(
+  thoughtItems: ThoughtItem[],
+  proseReasoning: string | undefined,
+  hasOpenHandler: boolean
+): boolean {
+  if (!hasOpenHandler) return false;
+  if (proseReasoning?.trim()) return true;
+  return thoughtItems.length > 0;
 }
 
 /**
- * Inline bubble listing tools (and optional streamed thinking) for one assistant turn.
+ * Compact inline affordance for one assistant turn; full trace opens in the chain-of-thought modal.
  */
 export const ReasoningTraceBubble: React.FC<ReasoningTraceBubbleProps> = ({
   thoughtItems,
   proseReasoning,
   onViewFullReasoning,
 }) => {
-  const toolLines = useMemo(() => toolListLines(thoughtItems), [thoughtItems]);
-  const streamedThinking = useMemo(() => joinedReasoningChunks(thoughtItems), [thoughtItems]);
-  const safeProse = proseReasoning ? sanitizeDisplayText(proseReasoning) : '';
-  const safeStreamed = sanitizeDisplayText(streamedThinking).trim();
-
-  const hasModalContent =
-    onViewFullReasoning &&
-    (toolLines.length > 0 || safeProse.trim() || safeStreamed.length > 0);
+  const canOpen = traceHasDisplayableContent(thoughtItems, proseReasoning, !!onViewFullReasoning);
+  if (!canOpen) return null;
 
   return (
     <Box
@@ -71,56 +57,25 @@ export const ReasoningTraceBubble: React.FC<ReasoningTraceBubbleProps> = ({
       }}
     >
       <TracePaper elevation={0}>
-        <Typography variant="caption" sx={{ fontWeight: 600, letterSpacing: '0.02em', opacity: 0.85 }}>
-          Reasoning
-        </Typography>
-        {toolLines.length > 0 ? (
-          <Box component="ul" sx={{ m: 0, pl: 2.5, mb: 0 }}>
-            {toolLines.map((line, index) => (
-              <Typography
-                key={`${index}-${line.slice(0, 24)}`}
-                component="li"
-                variant="body2"
-                sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-              >
-                {sanitizeDisplayText(line)}
-              </Typography>
-            ))}
-          </Box>
-        ) : null}
-        {safeStreamed ? (
-          <Typography
-            variant="body2"
-            component="div"
-            sx={{
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              fontFamily: 'ui-monospace, monospace',
-              fontSize: '0.8rem',
-              opacity: 0.92,
-            }}
-          >
-            {safeStreamed}
-          </Typography>
-        ) : null}
-        {safeProse.trim() ? (
-          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', opacity: 0.95 }}>
-            {safeProse.trim()}
-          </Typography>
-        ) : null}
-        {hasModalContent ? (
-          <Button
-            variant="text"
-            size="small"
-            onClick={(event) => {
-              event.stopPropagation();
-              onViewFullReasoning?.();
-            }}
-            sx={{ alignSelf: 'flex-start', py: 0.25, px: 0.5, minHeight: 0, textTransform: 'none' }}
-          >
-            View full reasoning
-          </Button>
-        ) : null}
+        <Button
+          variant="text"
+          size="small"
+          onClick={(event) => {
+            event.stopPropagation();
+            onViewFullReasoning?.();
+          }}
+          sx={{
+            alignSelf: 'flex-start',
+            py: 0.5,
+            px: 0.75,
+            minHeight: 0,
+            textTransform: 'none',
+            fontSize: '0.8125rem',
+            fontWeight: 500,
+          }}
+        >
+          View Thought Process
+        </Button>
       </TracePaper>
     </Box>
   );

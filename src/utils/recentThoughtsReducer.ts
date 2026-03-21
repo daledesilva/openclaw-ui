@@ -186,6 +186,81 @@ export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Mes
   return out;
 }
 
+/** One row in the chain-of-thought modal (after merging adjacent streamed chunks). */
+export type ThoughtProcessModalSegment =
+  | { kind: 'toolHint'; text: string }
+  | { kind: 'toolResult'; text: string }
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'prose'; text: string };
+
+/**
+ * Turns `ThoughtItem[]` into modal rows: consecutive `reasoningChunk` merged into one segment,
+ * then optional `proseReasoning` as a final segment.
+ */
+export function thoughtItemsToModalSegments(
+  items: ThoughtItem[],
+  proseReasoning?: string
+): ThoughtProcessModalSegment[] {
+  const segments: ThoughtProcessModalSegment[] = [];
+  let reasoningBuffer = '';
+
+  const flushReasoning = () => {
+    const trimmed = reasoningBuffer.trim();
+    if (trimmed) {
+      segments.push({ kind: 'reasoning', text: trimmed });
+    }
+    reasoningBuffer = '';
+  };
+
+  for (const item of items) {
+    if (item.kind === 'reasoningChunk') {
+      reasoningBuffer += item.text;
+    } else {
+      flushReasoning();
+      if (item.kind === 'toolHint') {
+        segments.push({ kind: 'toolHint', text: item.label });
+      } else {
+        segments.push({ kind: 'toolResult', text: item.summary });
+      }
+    }
+  }
+  flushReasoning();
+
+  const proseTrimmed = proseReasoning?.trim();
+  if (proseTrimmed) {
+    segments.push({ kind: 'prose', text: proseTrimmed });
+  }
+
+  return segments;
+}
+
+/** Latest completed trace or legacy assistant reasoning for header / history modal. */
+export function findLastHistoricalChainOfThought(
+  messages: Message[]
+):
+  | { kind: 'structured'; thoughtItems: ThoughtItem[]; proseReasoning?: string }
+  | { kind: 'plain'; text: string }
+  | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.kind === 'reasoningTrace') {
+      const thoughtItems = m.thoughtItems ?? [];
+      const prose = m.proseReasoning;
+      if (thoughtItems.length > 0 || prose?.trim()) {
+        return {
+          kind: 'structured',
+          thoughtItems,
+          ...(prose?.trim() ? { proseReasoning: prose.trim() } : {}),
+        };
+      }
+    }
+    if (m.role === 'ai' && (!m.kind || m.kind === 'assistant') && m.reasoning?.trim()) {
+      return { kind: 'plain', text: m.reasoning };
+    }
+  }
+  return null;
+}
+
 /** Format trace + prose for the chain-of-thought modal. */
 export function formatThoughtItemsForModal(items: ThoughtItem[], proseReasoning?: string): string {
   const toolLines: string[] = [];

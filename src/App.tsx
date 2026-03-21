@@ -21,14 +21,14 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { ChatBubble } from './components/ChatBubble';
 import { ReasoningTraceBubble } from './components/ReasoningTraceBubble';
 import { MessageInput } from './components/MessageInput';
-import { ChainOfThoughtModal } from './components/ChainOfThoughtModal';
+import { ChainOfThoughtModal, type ChainOfThoughtModalContent } from './components/ChainOfThoughtModal';
 import { TokenSetupScreen } from './components/TokenSetupScreen';
 import type { Message, ThoughtItem } from './chatThreadTypes';
 import {
   appendThoughtItem,
   applyAssistantFinalWithThoughtBuffer,
+  findLastHistoricalChainOfThought,
   foldFetchedHistoryToMessages,
-  formatThoughtItemsForModal,
 } from './utils/recentThoughtsReducer';
 import {
   initGatewayConnection,
@@ -75,8 +75,8 @@ export default function App() {
   const [runTerminalNotice, setRunTerminalNotice] = useState<RunTerminalNotice | null>(null);
   const lastStreamActivityAtRef = useRef<number>(Date.now());
   const [cotOpen, setCotOpen] = useState(false);
-  /** When set, modal shows this text instead of live `activeReasoning` (e.g. history bubble). */
-  const [cotReasoningOverride, setCotReasoningOverride] = useState<string | null>(null);
+  /** Snapshot when opening the chain-of-thought modal (structured trace or plain legacy text). */
+  const [cotModalPayload, setCotModalPayload] = useState<ChainOfThoughtModalContent | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
@@ -88,21 +88,10 @@ export default function App() {
   const isMobile = useMediaQuery((theme: Theme) => theme.breakpoints.down('sm'));
   const lastReasoningLine =
     sanitizeDisplayText(activeReasoning).trim().split('\n').pop() || '';
-  const cotModalText = cotReasoningOverride ?? activeReasoning;
-
-  const lastReasoningFromHistory = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]!;
-      if (m.kind === 'reasoningTrace') {
-        const text = formatThoughtItemsForModal(m.thoughtItems ?? [], m.proseReasoning);
-        if (text.trim()) return text;
-      }
-      if (m.role === 'ai' && (!m.kind || m.kind === 'assistant') && m.reasoning?.trim()) {
-        return m.reasoning;
-      }
-    }
-    return null;
-  }, [messages]);
+  const lastHistoricalChainOfThought = useMemo(
+    () => findLastHistoricalChainOfThought(messages),
+    [messages]
+  );
 
   useEffect(() => {
     agentActivityRef.current = agentActivity;
@@ -267,7 +256,7 @@ export default function App() {
     setRunTerminalNotice(null);
     setAgentActivity('idle');
     setCotOpen(false);
-    setCotReasoningOverride(null);
+    setCotModalPayload(null);
     lastStreamActivityAtRef.current = Date.now();
   };
 
@@ -409,19 +398,38 @@ export default function App() {
                   </IconButton>
                 </span>
               </Tooltip>
-              {(sanitizeDisplayText(activeReasoning).trim() || lastReasoningFromHistory) && (
+              {(sanitizeDisplayText(activeReasoning).trim() || lastHistoricalChainOfThought) && (
                 <Tooltip title="Chain of thought">
                   <IconButton
                     color="inherit"
                     size="small"
                     aria-label="Open chain of thought"
                     onClick={() => {
-                      if (sanitizeDisplayText(activeReasoning).trim()) {
-                        setCotReasoningOverride(null);
-                      } else if (lastReasoningFromHistory) {
-                        setCotReasoningOverride(sanitizeDisplayText(lastReasoningFromHistory));
+                      const activeTrim = sanitizeDisplayText(activeReasoning).trim();
+                      if (activeTrim) {
+                        const refSnapshot = [...recentThoughtsRef.current];
+                        if (refSnapshot.length > 0) {
+                          setCotModalPayload({ mode: 'structured', thoughtItems: refSnapshot });
+                        } else {
+                          setCotModalPayload({ mode: 'plain', text: activeReasoning });
+                        }
+                      } else if (lastHistoricalChainOfThought) {
+                        if (lastHistoricalChainOfThought.kind === 'structured') {
+                          setCotModalPayload({
+                            mode: 'structured',
+                            thoughtItems: lastHistoricalChainOfThought.thoughtItems,
+                            ...(lastHistoricalChainOfThought.proseReasoning
+                              ? { proseReasoning: lastHistoricalChainOfThought.proseReasoning }
+                              : {}),
+                          });
+                        } else {
+                          setCotModalPayload({
+                            mode: 'plain',
+                            text: sanitizeDisplayText(lastHistoricalChainOfThought.text),
+                          });
+                        }
                       } else {
-                        setCotReasoningOverride(null);
+                        setCotModalPayload({ mode: 'plain', text: '' });
                       }
                       setCotOpen(true);
                     }}
@@ -517,9 +525,11 @@ export default function App() {
                   thoughtItems={msg.thoughtItems ?? []}
                   proseReasoning={msg.proseReasoning}
                   onViewFullReasoning={() => {
-                    setCotReasoningOverride(
-                      formatThoughtItemsForModal(msg.thoughtItems ?? [], msg.proseReasoning)
-                    );
+                    setCotModalPayload({
+                      mode: 'structured',
+                      thoughtItems: msg.thoughtItems ?? [],
+                      ...(msg.proseReasoning?.trim() ? { proseReasoning: msg.proseReasoning } : {}),
+                    });
                     setCotOpen(true);
                   }}
                 />
@@ -542,7 +552,7 @@ export default function App() {
               (!msg.kind || msg.kind === 'assistant') &&
               msg.reasoning?.trim()
                 ? () => {
-                    setCotReasoningOverride(sanitizeDisplayText(msg.reasoning!));
+                    setCotModalPayload({ mode: 'plain', text: sanitizeDisplayText(msg.reasoning!) });
                     setCotOpen(true);
                   }
                 : undefined;
@@ -566,7 +576,12 @@ export default function App() {
               isThinking={true}
               streamPhase={agentActivity as StreamPhaseStyle}
               onClick={() => {
-                setCotReasoningOverride(null);
+                const refSnapshot = [...recentThoughtsRef.current];
+                if (refSnapshot.length > 0) {
+                  setCotModalPayload({ mode: 'structured', thoughtItems: refSnapshot });
+                } else {
+                  setCotModalPayload({ mode: 'plain', text: activeReasoning });
+                }
                 setCotOpen(true);
               }}
             />
@@ -586,9 +601,9 @@ export default function App() {
         open={cotOpen}
         onClose={() => {
           setCotOpen(false);
-          setCotReasoningOverride(null);
+          setCotModalPayload(null);
         }}
-        reasoning={cotModalText}
+        content={cotModalPayload ?? { mode: 'plain', text: '' }}
       />
     </Box>
   );
