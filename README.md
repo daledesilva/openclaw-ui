@@ -68,7 +68,7 @@ ingress:
 
 - **OpenClaw:**  
   `curl -i -X POST "https://<their-hostname>/deploy" -H "Authorization: Bearer <same-secret-as-env>"`  
-  Expect **200** and JSON with **`deploy_complete`** after `npm run deploy:local` finishes (may take minutes the first time).
+  Expect **202** and **`deploy_started`** immediately; **`deploy:local`** then runs **in the background** on the host (watch the **`webhook:deploy`** terminal for success or errors). This avoids **Cloudflare 524** (timeout while **`npm ci`** / build runs).
 
 **7 — Serve the UI (separate from the tunnel)**
 
@@ -84,8 +84,8 @@ ingress:
 
 1. [`.github/workflows/deploy-host.yml`](.github/workflows/deploy-host.yml) runs **`verify`** (`npm ci` + `npm run build`). If it **fails**, fix the build first—the host is not notified.  
 2. Job **`notify-host`** always runs after **verify**. Open its log → step **“Trigger deploy webhook”**: either **`curl`** ran (secrets set) or **“Skipping deploy webhook…”** (one or both secrets missing—workflow is still green).  
-3. When **`curl`** runs, it **POSTs** **`DEPLOY_WEBHOOK_URL`** with **`Authorization: Bearer`** `DEPLOY_WEBHOOK_SECRET`.  
-4. On the host, **tunnel**, **`npm run webhook:deploy`**, and **`serve`** (4173) should still be running. The listener runs **`npm run deploy:local`** (`git reset --hard origin/main`, etc.).  
+3. When **`curl`** runs, it **POSTs** the webhook; the listener answers **202** right away and runs **`npm run deploy:local`** in the **background** (so Cloudflare does not hit **524** waiting for a long build). **GitHub green does not prove** the host build succeeded—check the **`webhook:deploy`** window for **`deploy:local finished OK`** or an error.  
+4. On the host, **tunnel**, **`npm run webhook:deploy`**, and **`serve`** (4173) should still be running.  
 5. Stale PWA: suggest hard refresh.
 
 **OpenClaw (workflow edits):** Never add **`if: ${{ secrets.… }}`** on a **job**—GitHub rejects it. Optional notify logic belongs in a **step** (this repo uses a shell check + skip message).
@@ -104,6 +104,7 @@ On the host: **`scripts\deploy-local.cmd`** or **`npm run deploy:local`** (disca
 |--------|--------|
 | **`Cannot unmarshal !!str 'http…'`** in cloudflared | `ingress` rules each start with **`-`**; **`credentials-file`** uses **`/`** not `\`; catch‑all **`http_status:404`** present. |
 | CI green but host never updates | Open **notify-host** → if log says **Skipping deploy webhook**, set **both** Action secrets. If **`curl`** ran, check tunnel, **`webhook:deploy`**, and **`/health`**. |
+| **notify-host failed** (curl exit **22** / HTTP **524**) | **524** = proxy timed out waiting for the response; this repo’s webhook now returns **202** immediately and builds in the **background**—redeploy **`webhook:deploy`** from latest `main`. Other codes: log shows **body** + **status**. **401** = secret mismatch; **404** = bad URL/path; **429** = overlapping deploy. **500** = rare spawn error before background run. |
 | **401** on POST | Bearer secret ≠ **`.env.webhook`**. |
 | UI won’t connect to agent | Gateway up; dev **`.env.local`**; firewall / bind **18789** on LAN. |
 | UI stale on host | **`serve`** serving **this** repo’s **`dist/`**; run **`deploy-local`**; PWA cache. |

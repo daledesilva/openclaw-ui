@@ -8,12 +8,15 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      # Must be set on the job for JS actions (checkout/setup-node) to pick it up.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - name: Install and build
@@ -25,6 +28,8 @@ jobs:
   notify-host:
     needs: verify
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Trigger deploy webhook
         env:
@@ -35,6 +40,21 @@ jobs:
             echo "Skipping deploy webhook: set DEPLOY_WEBHOOK_URL and DEPLOY_WEBHOOK_SECRET in repo Actions secrets."
             exit 0
           fi
-          curl -fsS -X POST \
+          echo "POST $URL"
+          # No -f: capture body + status. Exit 22 from curl -f hid the real HTTP error.
+          code=$(curl -sS --max-time 900 -o /tmp/webhook_body -w "%{http_code}" -X POST \
             -H "Authorization: Bearer ${SECRET}" \
-            "${URL}"
+            "${URL}" || echo "000")
+          echo "----- response body -----"
+          cat /tmp/webhook_body || true
+          echo ""
+          echo "-----"
+          echo "HTTP status: $code"
+          if [ "$code" = "000" ]; then
+            echo "::error::curl failed (network/DNS/tunnel). Check URL and that the tunnel is up."
+            exit 1
+          fi
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::Webhook returned HTTP $code. Typical: 401 secret mismatch; 404 wrong URL or path; 429 deploy already running; 500 npm/git failed on host; 502/524 tunnel or timeout (host deploy may exceed Cloudflare limits)."
+            exit 1
+          fi

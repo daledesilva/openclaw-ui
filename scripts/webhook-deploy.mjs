@@ -67,19 +67,28 @@ function readBody(req) {
 
 let deployInProgress = false;
 
-function runDeploy() {
-  return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', 'deploy:local'], {
-      cwd: repoRoot,
-      shell: true,
-      stdio: 'inherit',
-      env: process.env,
-    });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`deploy:local exited with code ${code}`));
-    });
+/**
+ * Run deploy in the background so HTTP responds quickly. Cloudflare (and other
+ * proxies) typically time out around ~100s; npm ci + build often exceeds that (524).
+ */
+function startDeployInBackground() {
+  const child = spawn('npm', ['run', 'deploy:local'], {
+    cwd: repoRoot,
+    shell: true,
+    stdio: 'inherit',
+    env: process.env,
+  });
+  child.on('error', (err) => {
+    console.error('[webhook] deploy spawn error:', err);
+    deployInProgress = false;
+  });
+  child.on('close', (code) => {
+    deployInProgress = false;
+    if (code === 0) {
+      console.log('[webhook] deploy:local finished OK');
+    } else {
+      console.error('[webhook] deploy:local exited with code', code);
+    }
   });
 }
 
@@ -112,18 +121,31 @@ const server = http.createServer(async (req, res) => {
     deployInProgress = true;
     try {
       await readBody(req);
-      await runDeploy();
-      json(res, 200, { ok: true, message: 'deploy_complete' });
     } catch (e) {
+      deployInProgress = false;
+      console.error(e);
+      json(res, 400, { ok: false, error: 'bad_request' });
+      return;
+    }
+
+    try {
+      startDeployInBackground();
+    } catch (e) {
+      deployInProgress = false;
       console.error(e);
       json(res, 500, {
         ok: false,
-        error: 'deploy_failed',
+        error: 'spawn_failed',
         message: e instanceof Error ? e.message : String(e),
       });
-    } finally {
-      deployInProgress = false;
+      return;
     }
+
+    json(res, 202, {
+      ok: true,
+      message: 'deploy_started',
+      note: 'npm run deploy:local runs in the background; watch this terminal for result.',
+    });
     return;
   }
 
