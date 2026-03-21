@@ -156,6 +156,17 @@ Leave `.env.local` **off** the gateway PC when running `npm run build` so produc
 
 ---
 
+## App version (header + gateway)
+
+The UI shows **`package.json` version + SemVer build metadata**, e.g. `0.1.0+12`. The part after **`+`** is a refresh counter:
+
+- **Local `npm run dev` / `npm run build`:** increments a gitignored file **`.openclaw-build-rev`** on each build and on debounced saves under **`src/`** (and **`index.html`**). The header uses a **custom Vite HMR event** so the new `+<rev>` shows immediately without a full reload.
+- **GitHub Actions** (this repo’s workflow): sets **`VITE_BUILD_REV`** to the workflow **`run_number`**, so production builds use that instead of the local file.
+
+Bump **`MAJOR.MINOR.PATCH`** only by editing **`package.json`** / **`npm version`** when you want a new release line.
+
+---
+
 ## Windows script reference
 
 | Item | Detail |

@@ -11,6 +11,7 @@ import {
   hasGatewayToken,
   clearStoredGatewayToken,
 } from './api/gateway';
+import { useLiveAppVersion } from './useLiveAppVersion';
 
 export interface Message {
   id: string;
@@ -32,6 +33,7 @@ function mapHistoryToMessages(
 }
 
 export default function App() {
+  const appVersion = useLiveAppVersion();
   const [tokenReady, setTokenReady] = useState(hasGatewayToken());
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeReasoning, setActiveReasoning] = useState<string>('');
@@ -120,7 +122,16 @@ export default function App() {
     <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <Paper elevation={0} sx={{ p: 2, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 0 }}>
-          <Typography variant="h6">OpenClaw UI</Typography>
+          <Typography variant="h6" component="h1">
+            OpenClaw UI
+          </Typography>
+          <Typography
+            variant="caption"
+            component="p"
+            sx={{ display: 'block', mt: 0.25, opacity: 0.72, fontSize: '0.68rem', letterSpacing: '0.02em' }}
+          >
+            {appVersion}
+          </Typography>
           {connectionStatus === 'connecting' && (
             <Typography variant="caption" sx={{ opacity: 0.9 }}>
               Connecting…

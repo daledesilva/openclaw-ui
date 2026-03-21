@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 .env.webhook
+.openclaw-build-rev
 
 # Editor directories and files
 .vscode/*

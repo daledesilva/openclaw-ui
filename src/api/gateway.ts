@@ -3,6 +3,7 @@ import {
   createDeviceBlock,
   isDeviceSigningAvailable,
 } from './device-auth';
+import { VITE_APP_VERSION_FULL } from '../appVersion';
 
 const LOG = '[OpenClaw gateway]';
 const DEBUG = import.meta.env.VITE_OPENCLAW_DEBUG === '1' || import.meta.env.DEV;
@@ -149,7 +150,7 @@ function connect() {
         maxProtocol: 3,
         client: {
           id: 'webchat-ui',
-          version: '0.1.0',
+          version: VITE_APP_VERSION_FULL,
           platform: 'web',
           mode: 'webchat',
         },

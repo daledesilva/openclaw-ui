@@ -21,6 +21,8 @@ jobs:
           cache: npm
 
       - name: Install and build
+        env:
+          VITE_BUILD_REV: ${{ github.run_number }}
         run: |
           npm ci
           npm run build
