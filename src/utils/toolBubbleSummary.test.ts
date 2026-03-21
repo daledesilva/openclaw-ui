@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { summarizeToolCall, summarizeToolResult } from './toolBubbleSummary';
+import {
+  lastToolSummaryFromStreamMessage,
+  summarizeToolCall,
+  summarizeToolResult,
+  toolHintFromAgentStreamData,
+} from './toolBubbleSummary';
 
 describe('summarizeToolResult', () => {
   it('returns Error when isError', () => {
@@ -58,5 +63,55 @@ describe('summarizeToolCall', () => {
         argumentsPreview: '{"path":"/tmp/a"}',
       })
     ).toContain('read_file');
+  });
+});
+
+describe('lastToolSummaryFromStreamMessage', () => {
+  it('returns null when no tools', () => {
+    expect(lastToolSummaryFromStreamMessage({ content: [{ type: 'text', text: 'Hi' }] })).toBeNull();
+  });
+
+  it('returns summary for last toolCall in content array', () => {
+    const summary = lastToolSummaryFromStreamMessage({
+      content: [
+        { type: 'toolCall', name: 'a', arguments: {} },
+        { type: 'toolCall', name: 'read_file', arguments: { path: '/x' } },
+      ],
+    });
+    expect(summary).toBeTruthy();
+    expect(summary).toContain('read_file');
+  });
+
+  it('parses JSON array in message.text for toolCall parts', () => {
+    const text = JSON.stringify([
+      { type: 'toolCall', name: 'read_file', arguments: { path: '/y' } },
+    ]);
+    const summary = lastToolSummaryFromStreamMessage({ text });
+    expect(summary).toBeTruthy();
+    expect(summary).toContain('read_file');
+  });
+
+  it('returns null for plain message.text without JSON tools', () => {
+    expect(lastToolSummaryFromStreamMessage({ text: 'hello' })).toBeNull();
+  });
+});
+
+describe('toolHintFromAgentStreamData', () => {
+  it('returns null for reasoning-shaped payload', () => {
+    expect(toolHintFromAgentStreamData({ text: 'thinking…' })).toBeNull();
+  });
+
+  it('reads nested toolCall', () => {
+    const hint = toolHintFromAgentStreamData({
+      toolCall: { name: 'list_dir', arguments: { path: '/tmp' } },
+    });
+    expect(hint).toBeTruthy();
+    expect(hint).toContain('list_dir');
+  });
+
+  it('reads top-level name + arguments', () => {
+    const hint = toolHintFromAgentStreamData({ name: 'web_search', arguments: { query: 'cats' } });
+    expect(hint).toBeTruthy();
+    expect(hint).toContain('Search for');
   });
 });

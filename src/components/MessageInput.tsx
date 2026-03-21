@@ -12,13 +12,18 @@ const StyledForm = styled('form')(({ theme }) => ({
 interface MessageInputProps {
   onSend: (text: string) => void;
   disabled?: boolean;
+  placeholder?: string;
 }
 
 /**
  * Custom wrapper around MUI TextField for the chat input.
  * Abstracts out standard behavior (enter to send) and styling.
  */
-export const MessageInput: React.FC<MessageInputProps> = ({ onSend, disabled }) => {
+export const MessageInput: React.FC<MessageInputProps> = ({
+  onSend,
+  disabled,
+  placeholder = 'Send a message to OpenClaw…',
+}) => {
   const [text, setText] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -42,7 +47,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ onSend, disabled }) 
         fullWidth
         multiline
         maxRows={4}
-        placeholder="Send a message to OpenClaw..."
+        placeholder={placeholder}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}

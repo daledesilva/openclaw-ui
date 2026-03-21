@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -9,188 +9,82 @@ import {
   Button,
   IconButton,
   Tooltip,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { ChatBubble } from './components/ChatBubble';
+import { ReasoningTraceBubble } from './components/ReasoningTraceBubble';
 import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtModal } from './components/ChainOfThoughtModal';
 import { TokenSetupScreen } from './components/TokenSetupScreen';
-import { ToolCallBubble } from './components/ToolCallBubble';
-import { ToolResultBubble } from './components/ToolResultBubble';
-import { summarizeToolCall, summarizeToolResult } from './utils/toolBubbleSummary';
+import type { Message, ThoughtItem } from './chatThreadTypes';
+import {
+  appendThoughtItem,
+  applyAssistantFinalWithThoughtBuffer,
+  foldFetchedHistoryToMessages,
+  formatThoughtItemsForModal,
+} from './utils/recentThoughtsReducer';
 import {
   initGatewayConnection,
   sendChatMessage,
   fetchChatHistory,
   hasGatewayToken,
+  isGatewaySessionKeyPinnedByBuild,
+  startNewWebchatSession,
   clearStoredGatewayToken,
   disconnectGateway,
+  requestGatewayReconnect,
 } from './api/gateway';
 import type { FetchedChatMessage } from './api/gateway';
-import type { AssistantDisplayPayload, LinkPreview, ToolCallEntry } from './api/gateway-types';
 import { useLiveAppVersion } from './useLiveAppVersion';
 import { sanitizeDisplayText } from './utils/sanitizeDisplayText';
+import {
+  type AgentRunActivity,
+  inputPlaceholderForActivity,
+  isAgentRunBlockingInput,
+  nextActivityFromContentChunk,
+  nextActivityFromDeltaHints,
+  nextActivityFromReasoningChunk,
+  phaseBubbleDisplayText,
+} from './utils/agentRunActivity';
+import type { StreamPhaseStyle } from './components/ChatBubble';
 
-export type MessageBubbleKind = 'assistant' | 'toolCall' | 'toolResult';
-
-export interface Message {
-  id: string;
-  role: 'user' | 'ai';
-  kind?: MessageBubbleKind;
-  content: string;
-  reasoning?: string;
-  senderLabel?: string;
-  timestamp?: number;
-  isError?: boolean;
-  imageUrls?: string[];
-  linkPreviews?: LinkPreview[];
-  /** Collapsed tool row label (after `Tool: `) */
-  toolSummary?: string;
-  /** Pretty-print source for expanded tool call / tool result */
-  toolRawPayload?: unknown;
-}
+export type { Message } from './chatThreadTypes';
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'ready' | 'error';
 
-function toolCallLine(entry: ToolCallEntry): string {
-  return entry.argumentsPreview ? `${entry.name}(${entry.argumentsPreview})` : `${entry.name}()`;
-}
+/** Default watchdog when no stream activity (ms). */
+const AGENT_RUN_STALE_AFTER_MS = 90_000;
 
-function mapHistoryToMessages(history: FetchedChatMessage[]): Message[] {
-  const out: Message[] = [];
-  history.forEach((msg, index) => {
-    const idBase = `hist-${msg.timestamp ?? 'x'}-${index}`;
-
-    if (msg.role === 'toolresult') {
-      out.push({
-        id: idBase,
-        role: 'ai',
-        kind: 'toolResult',
-        content: msg.content,
-        isError: msg.isError,
-        senderLabel: msg.senderLabel,
-        timestamp: msg.timestamp,
-        toolSummary: summarizeToolResult({
-          toolName: msg.toolName,
-          isError: msg.isError,
-          raw: msg.toolRawPayload,
-        }),
-        toolRawPayload: msg.toolRawPayload,
-      });
-      return;
-    }
-
-    if (msg.role === 'assistant' || msg.role === 'ai') {
-      const toolCalls = msg.toolCalls ?? [];
-      toolCalls.forEach((tc, t) => {
-        out.push({
-          id: `${idBase}-tc-${t}`,
-          role: 'ai',
-          kind: 'toolCall',
-          content: toolCallLine(tc),
-          toolSummary: summarizeToolCall(tc),
-          toolRawPayload: { name: tc.name, arguments: tc.arguments ?? {} },
-        });
-      });
-      const hasAssistantBubble =
-        msg.content.trim().length > 0 ||
-        (msg.linkPreviews?.length ?? 0) > 0 ||
-        (msg.imageUrls?.length ?? 0) > 0 ||
-        msg.isError;
-      if (hasAssistantBubble || toolCalls.length === 0) {
-        out.push({
-          id: idBase,
-          role: 'ai',
-          kind: 'assistant',
-          content: msg.content,
-          reasoning: msg.reasoning?.trim() ? msg.reasoning : undefined,
-          senderLabel: msg.senderLabel,
-          timestamp: msg.timestamp,
-          isError: msg.isError,
-          imageUrls: msg.imageUrls,
-          linkPreviews: msg.linkPreviews,
-        });
-      }
-      return;
-    }
-
-    out.push({
-      id: idBase,
-      role: msg.role === 'user' ? 'user' : 'ai',
-      content: msg.content,
-      reasoning: msg.reasoning?.trim() ? msg.reasoning : undefined,
-      senderLabel: msg.senderLabel,
-      timestamp: msg.timestamp,
-      isError: msg.isError,
-      imageUrls: msg.imageUrls,
-      linkPreviews: msg.linkPreviews,
-    });
-  });
-  return out;
-}
-
-function mergeAssistantFinalIntoMessages(
-  prev: Message[],
-  payload: AssistantDisplayPayload,
-  placeholderId: string
-): Message[] {
-  const lastIdx = prev.length - 1;
-  if (lastIdx < 0) return prev;
-  const last = prev[lastIdx]!;
-  if (last.role !== 'ai') return prev;
-  if (last.kind && last.kind !== 'assistant') return prev;
-
-  const toolCalls = payload.toolCalls;
-  const pieces: Message[] = [];
-  if (toolCalls.length) {
-    toolCalls.forEach((tc, t) => {
-      pieces.push({
-        id: `${placeholderId}-f-${t}`,
-        role: 'ai',
-        kind: 'toolCall',
-        content: toolCallLine(tc),
-        toolSummary: summarizeToolCall(tc),
-        toolRawPayload: { name: tc.name, arguments: tc.arguments ?? {} },
-      });
-    });
-  }
-  pieces.push({
-    ...last,
-    kind: 'assistant',
-    content: payload.content,
-    imageUrls: payload.imageUrls.length ? payload.imageUrls : undefined,
-    linkPreviews: payload.linkPreviews.length ? payload.linkPreviews : undefined,
-    isError: payload.isError,
-  });
-  return [...prev.slice(0, lastIdx), ...pieces];
-}
-
-function patchLastAssistantWithReasoning(messages: Message[], reasoningRaw: string): Message[] {
-  const trimmed = sanitizeDisplayText(reasoningRaw).trim();
-  if (!trimmed) return messages;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (m.role === 'ai' && (!m.kind || m.kind === 'assistant')) {
-      const next = [...messages];
-      next[i] = { ...m, reasoning: trimmed };
-      return next;
-    }
-  }
-  return messages;
-}
+type RunTerminalNotice = { kind: 'error'; message: string } | { kind: 'aborted' };
 
 export default function App() {
   const appVersion = useLiveAppVersion();
   const [tokenReady, setTokenReady] = useState(hasGatewayToken());
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeReasoning, setActiveReasoning] = useState<string>('');
-  const activeReasoningRef = useRef<string>('');
-  const [isThinking, setIsThinking] = useState(false);
+  const [agentActivity, setAgentActivity] = useState<AgentRunActivity>('idle');
+  const agentActivityRef = useRef<AgentRunActivity>('idle');
+  const [liveLastToolSummary, setLiveLastToolSummary] = useState<string | null>(null);
+  const [runTerminalNotice, setRunTerminalNotice] = useState<RunTerminalNotice | null>(null);
+  const lastStreamActivityAtRef = useRef<number>(Date.now());
   const [cotOpen, setCotOpen] = useState(false);
   /** When set, modal shows this text instead of live `activeReasoning` (e.g. history bubble). */
   const [cotReasoningOverride, setCotReasoningOverride] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
+  const [newChatBusy, setNewChatBusy] = useState(false);
+  /** Non-answer signals for the current turn; flushed on `onAssistantFinal`. */
+  const recentThoughtsRef = useRef<ThoughtItem[]>([]);
+  const traceSeqRef = useRef(0);
+  const sessionKeyPinnedByBuild = isGatewaySessionKeyPinnedByBuild();
   const isMobile = useMediaQuery((theme: Theme) => theme.breakpoints.down('sm'));
   const lastReasoningLine =
     sanitizeDisplayText(activeReasoning).trim().split('\n').pop() || '';
@@ -199,6 +93,10 @@ export default function App() {
   const lastReasoningFromHistory = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]!;
+      if (m.kind === 'reasoningTrace') {
+        const text = formatThoughtItemsForModal(m.thoughtItems ?? [], m.proseReasoning);
+        if (text.trim()) return text;
+      }
       if (m.role === 'ai' && (!m.kind || m.kind === 'assistant') && m.reasoning?.trim()) {
         return m.reasoning;
       }
@@ -207,8 +105,38 @@ export default function App() {
   }, [messages]);
 
   useEffect(() => {
-    activeReasoningRef.current = activeReasoning;
-  }, [activeReasoning]);
+    agentActivityRef.current = agentActivity;
+  }, [agentActivity]);
+
+  const touchStreamActivity = () => {
+    lastStreamActivityAtRef.current = Date.now();
+  };
+
+  const syncStateFromFetchedHistory = useCallback((history: FetchedChatMessage[]) => {
+    setMessages(foldFetchedHistoryToMessages(history));
+    const reasoningBlocks = history
+      .filter((m) => {
+        const role = m.role.toLowerCase();
+        return (role === 'assistant' || role === 'ai') && m.reasoning.trim();
+      })
+      .map((m) => m.reasoning);
+    setActiveReasoning(
+      reasoningBlocks.length
+        ? reasoningBlocks.map((r) => sanitizeDisplayText(r)).join('\n\n---\n\n')
+        : ''
+    );
+  }, []);
+
+  useEffect(() => {
+    if (agentActivity === 'idle' || agentActivity === 'stale') return;
+    const tick = () => {
+      if (Date.now() - lastStreamActivityAtRef.current >= AGENT_RUN_STALE_AFTER_MS) {
+        setAgentActivity('stale');
+      }
+    };
+    const id = window.setInterval(tick, 4000);
+    return () => window.clearInterval(id);
+  }, [agentActivity]);
 
   useEffect(() => {
     if (!tokenReady) return;
@@ -219,11 +147,40 @@ export default function App() {
         }
       },
       onReasoning: (chunk) => {
-        setIsThinking(true);
-        setActiveReasoning((prev) => prev + sanitizeDisplayText(chunk));
+        touchStreamActivity();
+        setAgentActivity((prev) => nextActivityFromReasoningChunk(prev));
+        const safe = sanitizeDisplayText(chunk);
+        setActiveReasoning((prev) => prev + safe);
+        recentThoughtsRef.current = appendThoughtItem(recentThoughtsRef.current, {
+          kind: 'reasoningChunk',
+          text: safe,
+        });
+      },
+      onChatDelta: (info) => {
+        touchStreamActivity();
+        setAgentActivity((prev) => nextActivityFromDeltaHints(prev, info.hints));
+        if (info.lastToolSummary) {
+          setLiveLastToolSummary(info.lastToolSummary);
+          recentThoughtsRef.current = appendThoughtItem(recentThoughtsRef.current, {
+            kind: 'toolHint',
+            label: info.lastToolSummary,
+          });
+        }
+      },
+      onAgentStreamToolHint: (label) => {
+        touchStreamActivity();
+        const trimmed = sanitizeDisplayText(label).trim();
+        if (trimmed) {
+          setLiveLastToolSummary(trimmed);
+          recentThoughtsRef.current = appendThoughtItem(recentThoughtsRef.current, {
+            kind: 'toolHint',
+            label: trimmed,
+          });
+        }
       },
       onContent: (chunk) => {
-        setIsThinking(false);
+        touchStreamActivity();
+        setAgentActivity((prev) => nextActivityFromContentChunk(prev));
         const safe = sanitizeDisplayText(chunk);
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1];
@@ -240,31 +197,39 @@ export default function App() {
       },
       onAssistantFinal: (payload) => {
         setMessages((prev) => {
-          const lastIdx = prev.length - 1;
-          const last = prev[lastIdx];
-          const placeholderId =
-            last?.role === 'ai' && (!last.kind || last.kind === 'assistant') ? last.id : 'stream';
-          return mergeAssistantFinalIntoMessages(prev, payload, placeholderId);
+          const buffer = recentThoughtsRef.current;
+          recentThoughtsRef.current = [];
+          traceSeqRef.current += 1;
+          return applyAssistantFinalWithThoughtBuffer(
+            prev,
+            payload,
+            buffer,
+            `trace-${Date.now()}-${traceSeqRef.current}`
+          );
         });
       },
-      onChatTerminal: () => {
-        setIsThinking(false);
-        setMessages((prev) => patchLastAssistantWithReasoning(prev, activeReasoningRef.current));
+      onChatTerminal: (info) => {
+        setAgentActivity('idle');
+        setLiveLastToolSummary(null);
+        recentThoughtsRef.current = [];
+        touchStreamActivity();
+        if (info.state === 'error') {
+          setRunTerminalNotice({
+            kind: 'error',
+            message: (info.errorMessage?.trim() || 'Run failed').slice(0, 500),
+          });
+        } else if (info.state === 'aborted') {
+          setRunTerminalNotice({ kind: 'aborted' });
+        } else {
+          setRunTerminalNotice(null);
+        }
       },
       onConnected: () => {
         setConnectionStatus('ready');
         setConnectionError(null);
         fetchChatHistory()
           .then((history) => {
-            setMessages(mapHistoryToMessages(history));
-            const reasoningBlocks = history
-              .filter((m) => m.role === 'assistant' && m.reasoning.trim())
-              .map((m) => m.reasoning);
-            if (reasoningBlocks.length) {
-              setActiveReasoning(
-                reasoningBlocks.map((r) => sanitizeDisplayText(r)).join('\n\n---\n\n')
-              );
-            }
+            syncStateFromFetchedHistory(history);
           })
           .catch((err) => {
             console.error('[OpenClaw gateway] chat.history failed:', err);
@@ -274,9 +239,16 @@ export default function App() {
         setConnectionStatus('error');
         setConnectionError(error);
       },
+      onDisconnected: () => {
+        setConnectionStatus('disconnected');
+        setConnectionError('Disconnected from gateway.');
+        setAgentActivity('idle');
+        setLiveLastToolSummary(null);
+        recentThoughtsRef.current = [];
+      },
     });
     return () => disconnectGateway();
-  }, [tokenReady]);
+  }, [tokenReady, syncStateFromFetchedHistory]);
 
   if (!tokenReady) {
     return <TokenSetupScreen onTokenSet={() => setTokenReady(true)} />;
@@ -285,6 +257,33 @@ export default function App() {
   const handleReenterToken = () => {
     clearStoredGatewayToken();
     setTokenReady(false);
+  };
+
+  const resetLocalChatState = () => {
+    setMessages([]);
+    recentThoughtsRef.current = [];
+    setActiveReasoning('');
+    setLiveLastToolSummary(null);
+    setRunTerminalNotice(null);
+    setAgentActivity('idle');
+    setCotOpen(false);
+    setCotReasoningOverride(null);
+    lastStreamActivityAtRef.current = Date.now();
+  };
+
+  const handleConfirmNewChat = async () => {
+    setNewChatBusy(true);
+    try {
+      startNewWebchatSession();
+      resetLocalChatState();
+      const history = await fetchChatHistory();
+      syncStateFromFetchedHistory(history);
+    } catch (err) {
+      console.error('[OpenClaw gateway] new chat / chat.history failed:', err);
+    } finally {
+      setNewChatBusy(false);
+      setNewChatDialogOpen(false);
+    }
   };
 
   const handleSend = (text: string) => {
@@ -298,7 +297,11 @@ export default function App() {
     setMessages((prev) => [...prev, userMsg]);
 
     setActiveReasoning('');
-    setIsThinking(true);
+    recentThoughtsRef.current = [];
+    setRunTerminalNotice(null);
+    setLiveLastToolSummary(null);
+    setAgentActivity('pending');
+    touchStreamActivity();
 
     const aiMsgId = (Date.now() + 1).toString();
     setMessages((prev) => [
@@ -339,36 +342,122 @@ export default function App() {
                   Connecting…
                 </Typography>
               )}
+              {connectionStatus === 'disconnected' && connectionError && (
+                <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', mt: 0.5 }}>
+                  {connectionError}
+                </Typography>
+              )}
               {connectionStatus === 'error' && connectionError && (
                 <Typography variant="caption" sx={{ opacity: 0.9 }}>
                   {connectionError}
                 </Typography>
               )}
-            </Box>
-            {(sanitizeDisplayText(activeReasoning).trim() || lastReasoningFromHistory) && (
-              <Tooltip title="Chain of thought">
-                <IconButton
-                  color="inherit"
+              {connectionStatus === 'ready' && agentActivity !== 'idle' && (
+                <Chip
                   size="small"
-                  aria-label="Open chain of thought"
-                  onClick={() => {
-                    if (sanitizeDisplayText(activeReasoning).trim()) {
-                      setCotReasoningOverride(null);
-                    } else if (lastReasoningFromHistory) {
-                      setCotReasoningOverride(sanitizeDisplayText(lastReasoningFromHistory));
-                    } else {
-                      setCotReasoningOverride(null);
+                  label={
+                    agentActivity === 'pending'
+                      ? 'Waiting'
+                      : agentActivity === 'reasoning'
+                        ? 'Thinking'
+                        : agentActivity === 'acting'
+                          ? 'Using tools'
+                          : agentActivity === 'responding'
+                            ? 'Writing'
+                            : 'No recent activity'
+                  }
+                  sx={{ mt: 0.75, height: 22, fontSize: '0.7rem', bgcolor: 'rgba(255,255,255,0.2)' }}
+                />
+              )}
+              {connectionStatus === 'ready' && runTerminalNotice && (
+                <Chip
+                  size="small"
+                  color={runTerminalNotice.kind === 'error' ? 'error' : 'default'}
+                  label={
+                    runTerminalNotice.kind === 'aborted'
+                      ? 'Stopped'
+                      : runTerminalNotice.message.slice(0, 80) +
+                        (runTerminalNotice.message.length > 80 ? '…' : '')
+                  }
+                  onDelete={() => setRunTerminalNotice(null)}
+                  sx={{ mt: 0.5, height: 22, maxWidth: '100%', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
+                />
+              )}
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+              <Tooltip
+                title={
+                  sessionKeyPinnedByBuild
+                    ? 'Session key is fixed in the build (VITE_OPENCLAW_SESSION_KEY). Remove it in .env.local to start new chats from this UI.'
+                    : 'Start a new conversation (the current thread cannot be reopened here)'
+                }
+              >
+                <span>
+                  <IconButton
+                    color="inherit"
+                    size="small"
+                    aria-label="New chat"
+                    disabled={
+                      connectionStatus !== 'ready' ||
+                      isAgentRunBlockingInput(agentActivity) ||
+                      sessionKeyPinnedByBuild
                     }
-                    setCotOpen(true);
-                  }}
-                  sx={{ flexShrink: 0, opacity: 0.92 }}
-                >
-                  <PsychologyOutlinedIcon fontSize="small" />
-                </IconButton>
+                    onClick={() => setNewChatDialogOpen(true)}
+                    sx={{ opacity: 0.92 }}
+                  >
+                    <ChatBubbleOutlineIcon fontSize="small" />
+                  </IconButton>
+                </span>
               </Tooltip>
-            )}
+              {(sanitizeDisplayText(activeReasoning).trim() || lastReasoningFromHistory) && (
+                <Tooltip title="Chain of thought">
+                  <IconButton
+                    color="inherit"
+                    size="small"
+                    aria-label="Open chain of thought"
+                    onClick={() => {
+                      if (sanitizeDisplayText(activeReasoning).trim()) {
+                        setCotReasoningOverride(null);
+                      } else if (lastReasoningFromHistory) {
+                        setCotReasoningOverride(sanitizeDisplayText(lastReasoningFromHistory));
+                      } else {
+                        setCotReasoningOverride(null);
+                      }
+                      setCotOpen(true);
+                    }}
+                    sx={{ opacity: 0.92 }}
+                  >
+                    <PsychologyOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
           </Box>
         </Paper>
+
+        <Dialog
+          open={newChatDialogOpen}
+          onClose={() => !newChatBusy && setNewChatDialogOpen(false)}
+          aria-labelledby="new-chat-dialog-title"
+        >
+          <DialogTitle id="new-chat-dialog-title">New chat?</DialogTitle>
+          <DialogContent>
+            <DialogContentText component="div">
+              This starts a <strong>new gateway session</strong> for this browser (new session key in
+              local storage). The current conversation will disappear from this app and cannot be
+              reopened here. Older transcripts may still exist on the gateway under the previous
+              session id.
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setNewChatDialogOpen(false)} disabled={newChatBusy}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleConfirmNewChat()} color="primary" disabled={newChatBusy}>
+              {newChatBusy ? 'Starting…' : 'New chat'}
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         {connectionError && connectionStatus === 'error' && (
           <Alert
@@ -385,6 +474,28 @@ export default function App() {
           </Alert>
         )}
 
+        {connectionStatus === 'disconnected' && (
+          <Alert
+            severity="warning"
+            sx={{ m: 2 }}
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => {
+                  setConnectionStatus('connecting');
+                  setConnectionError(null);
+                  requestGatewayReconnect();
+                }}
+              >
+                Reconnect
+              </Button>
+            }
+          >
+            {connectionError ?? 'Connection lost.'} Use Reconnect or refresh the page.
+          </Alert>
+        )}
+
         <Box
           sx={{
             flex: 1,
@@ -398,24 +509,33 @@ export default function App() {
             maxWidth: '100%',
           }}
         >
-          {messages.map((msg) => {
-            if (msg.role === 'ai' && msg.kind === 'toolCall') {
+          {messages.map((msg, index) => {
+            if (msg.role === 'ai' && msg.kind === 'reasoningTrace') {
               return (
-                <ToolCallBubble
+                <ReasoningTraceBubble
                   key={msg.id}
-                  summary={msg.toolSummary ?? msg.content}
-                  expandPayload={msg.toolRawPayload ?? { name: 'tool', arguments: {} }}
+                  thoughtItems={msg.thoughtItems ?? []}
+                  proseReasoning={msg.proseReasoning}
+                  onViewFullReasoning={() => {
+                    setCotReasoningOverride(
+                      formatThoughtItemsForModal(msg.thoughtItems ?? [], msg.proseReasoning)
+                    );
+                    setCotOpen(true);
+                  }}
                 />
               );
             }
-            if (msg.role === 'ai' && msg.kind === 'toolResult') {
-              return (
-                <ToolResultBubble
-                  key={msg.id}
-                  summary={msg.toolSummary ?? '(result)'}
-                  expandPayload={msg.toolRawPayload ?? null}
-                />
-              );
+            const isLastMessage = index === messages.length - 1;
+            const runInFlight = agentActivity !== 'idle';
+            const isEmptyStreamingAssistantSlot =
+              msg.role === 'ai' &&
+              (!msg.kind || msg.kind === 'assistant') &&
+              !msg.content.trim() &&
+              !(msg.imageUrls?.length) &&
+              !(msg.linkPreviews?.length) &&
+              !msg.isError;
+            if (isEmptyStreamingAssistantSlot && isLastMessage && runInFlight) {
+              return null;
             }
             const viewReasoningHandler =
               msg.role === 'ai' &&
@@ -439,11 +559,12 @@ export default function App() {
               />
             );
           })}
-          {isThinking && (
+          {agentActivity !== 'idle' && agentActivity !== 'responding' && (
             <ChatBubble
               role="ai"
-              content={lastReasoningLine || 'Thinking…'}
+              content={phaseBubbleDisplayText(agentActivity, lastReasoningLine, liveLastToolSummary)}
               isThinking={true}
+              streamPhase={agentActivity as StreamPhaseStyle}
               onClick={() => {
                 setCotReasoningOverride(null);
                 setCotOpen(true);
@@ -455,7 +576,8 @@ export default function App() {
         <Box sx={{ p: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>
           <MessageInput
             onSend={handleSend}
-            disabled={isThinking || connectionStatus !== 'ready'}
+            disabled={connectionStatus !== 'ready' || isAgentRunBlockingInput(agentActivity)}
+            placeholder={inputPlaceholderForActivity(agentActivity, connectionStatus)}
           />
         </Box>
       </Box>

@@ -19,7 +19,7 @@ These instructions apply to all files in this repository.
 | `public/` | Static assets |
 | `docs/` | Optional deeper documentation (README is the deploy playbook) |
 
-**Architecture:** SPA connects to the OpenClaw gateway via **`VITE_OPENCLAW_GATEWAY_URL`**. Production builds often omit that var so the WS URL follows the page origin. GitHub Actions can trigger **`deploy:local`** on a host via **`webhook:deploy`** (see README).
+**Architecture:** SPA connects to the OpenClaw gateway via **`VITE_OPENCLAW_GATEWAY_URL`**. Production builds often omit that var so the WS URL follows the page origin. Chat UI folds gateway streams through a **`recentThoughts`** buffer and **`applyAssistantFinalWithThoughtBuffer`** (`src/utils/recentThoughtsReducer.ts`); tools and tool results are not separate chat bubbles—they appear only in **`reasoningTrace`**. See **`docs/chain-of-thought.md`** and **`docs/agent-run-phase.md`**. GitHub Actions can trigger **`deploy:local`** on a host via **`webhook:deploy`** (see README).
 
 **Key constraints:** Do not set `VITE_OPENCLAW_GATEWAY_URL` on gateway production builds unless intentional. `VITE_*` vars are public in the bundle. Dev from another origin may require gateway **`allowedOrigins`** updates.
 
@@ -32,7 +32,7 @@ Update this section as the **final step** of any plan that changes dependencies 
 - **Frontend:** React 18, TypeScript, Vite 5
 - **UI:** MUI v5, Emotion
 - **Content:** react-markdown, remark-gfm, rehype-sanitize
-- **Realtime:** WebSocket to gateway (`src/api/gateway.ts`)
+- **Realtime:** WebSocket to gateway (`src/api/gateway.ts`); in-flight phases, terminal payloads, reconnect, and `startNewWebchatSession` — `docs/agent-run-phase.md`, `docs/new-chat-session.md`
 - **PWA:** vite-plugin-pwa
 - **Testing:** Vitest — `npm run test`; also `npm run build` for `tsc` + Vite
 - **CI / deploy:** GitHub Actions, `npm run deploy:local`, `npm run webhook:deploy`

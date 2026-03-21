@@ -9,14 +9,33 @@ import {
   type FetchedChatMessage,
   type RawHistoryMessage,
   extractStreamText,
+  inferStreamPhaseHints,
   mapRawHistoryMessage,
   parseAssistantDisplayPayload,
+  type StreamPhaseHints,
 } from './gateway-types';
+import { lastToolSummaryFromStreamMessage, toolHintFromAgentStreamData } from '../utils/toolBubbleSummary';
 
 export type { FetchedChatMessage } from './gateway-types';
 
 const LOG = '[OpenClaw gateway]';
 const DEBUG = import.meta.env.VITE_OPENCLAW_DEBUG === '1' || import.meta.env.DEV;
+
+/** Terminal `chat` event payload surfaced to the UI (after stream handling when applicable). */
+export interface ChatTerminalInfo {
+  state: 'final' | 'aborted' | 'error';
+  errorMessage?: string;
+  runId?: string;
+}
+
+/** Per-`delta` chat event: structured hints for inferring tool vs answer vs thinking in the stream. */
+export interface ChatDeltaInfo {
+  runId?: string;
+  seq?: number;
+  hints: StreamPhaseHints;
+  /** Collapsed label for the last `toolCall` part in this delta, if any. */
+  lastToolSummary: string | null;
+}
 
 function logOutbound(obj: unknown, redactToken = false) {
   const safe = redactToken && typeof obj === 'object' && obj !== null && 'params' in obj
@@ -49,7 +68,12 @@ let onConnectedCallback: (() => void) | null = null;
 let onConnectErrorCallback: ((error: string) => void) | null = null;
 let onAssistantFinalCallback: ((payload: ReturnType<typeof parseAssistantDisplayPayload>) => void) | null =
   null;
-let onChatTerminalCallback: ((state: 'final' | 'aborted' | 'error') => void) | null = null;
+let onChatDeltaCallback: ((info: ChatDeltaInfo) => void) | null = null;
+let onChatTerminalCallback: ((info: ChatTerminalInfo) => void) | null = null;
+let onAgentStreamToolHintCallback: ((label: string) => void) | null = null;
+let onDisconnectedCallback: (() => void) | null = null;
+/** True after a successful `connect` res; cleared on socket close. Used to detect mid-session drops. */
+let gatewayHandshakeOk = false;
 
 const pendingReqs = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 let connectReqId: string | null = null;
@@ -72,9 +96,41 @@ function gatewayWebSocketUrl(): string {
   return defaultGatewayWebSocketUrl();
 }
 
+const WEBCHAT_SESSION_STORAGE_KEY = 'openclaw-ui-session-key';
+
+function getStoredWebchatSessionKey(): string | null {
+  try {
+    const t = localStorage.getItem(WEBCHAT_SESSION_STORAGE_KEY);
+    return t && t.trim() ? t.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Start a new gateway conversation: persist a fresh `sessionKey` for this origin.
+ * Subsequent `chat.send` / `chat.history` use it until the user starts another new chat.
+ */
+export function startNewWebchatSession(): string {
+  const key = `webchat-${crypto.randomUUID()}`;
+  try {
+    localStorage.setItem(WEBCHAT_SESSION_STORAGE_KEY, key);
+  } catch {
+    /* quota or disabled */
+  }
+  return key;
+}
+
+/** When true, `VITE_OPENCLAW_SESSION_KEY` pins the session — UI cannot rotate the thread. */
+export function isGatewaySessionKeyPinnedByBuild(): boolean {
+  return !!import.meta.env.VITE_OPENCLAW_SESSION_KEY?.trim();
+}
+
 function sessionKey(): string {
   const fromEnv = import.meta.env.VITE_OPENCLAW_SESSION_KEY?.trim();
   if (fromEnv) return fromEnv;
+  const stored = getStoredWebchatSessionKey();
+  if (stored) return stored;
   if (resolvedMainSessionKey) return resolvedMainSessionKey;
   return 'main';
 }
@@ -123,6 +179,7 @@ function connect() {
     return;
   }
 
+  gatewayHandshakeOk = false;
   resolvedMainSessionKey = null;
 
   const url = gatewayWebSocketUrl();
@@ -209,6 +266,8 @@ function connect() {
       return;
     }
 
+    console.log(`${LOG} message`, data);
+
     const t = (data as { type?: string }).type;
     const ev = (data as { event?: string }).event;
 
@@ -241,6 +300,7 @@ function connect() {
           const mainKey = hello?.snapshot?.sessionDefaults?.mainSessionKey?.trim();
           if (mainKey) resolvedMainSessionKey = mainKey;
           console.log(`${LOG} handshake ok, connected`);
+          gatewayHandshakeOk = true;
           onConnectedCallback?.();
         } else {
           const code = res.error?.details?.code ?? res.error?.code ?? '';
@@ -285,9 +345,13 @@ function connect() {
     if (t === 'event') {
       logInbound(data, `in event ${ev}`);
       if (ev?.startsWith('agent') || ev?.includes('stream')) {
-        const p = (data as { payload?: { stream?: string; data?: Record<string, unknown> } }).payload;
-        if (p?.stream === 'reasoning' && typeof p?.data?.text === 'string') {
-          onReasoningCallback?.(p.data.text);
+        const p = (data as { payload?: { stream?: string; data?: unknown } }).payload;
+        if (p?.stream === 'reasoning' && p?.data && typeof (p.data as Record<string, unknown>).text === 'string') {
+          onReasoningCallback?.((p.data as { text: string }).text);
+        }
+        const toolLabel = p?.data ? toolHintFromAgentStreamData(p.data) : null;
+        if (toolLabel) {
+          onAgentStreamToolHintCallback?.(toolLabel);
         }
       } else if (ev && !ROUTINE_EVENTS.has(ev)) {
         logUnhandled(data);
@@ -313,11 +377,17 @@ function connect() {
       clearTimeout(connectTimeout);
       connectTimeout = null;
     }
+    const wasReady = gatewayHandshakeOk;
+    const intentionalClientClose =
+      event.code === 1000 && (event.reason === 'client' || event.reason === 'reconnect');
     socket = null;
     connectReqId = null;
+    gatewayHandshakeOk = false;
     if (!handshakeComplete && event.code !== 1000) {
       const msg = event.reason || (event.code === 1006 ? 'Connection refused or gateway unreachable. Is the gateway running at the URL?' : `WebSocket closed (${event.code})`);
       onConnectErrorCallback?.(msg);
+    } else if (wasReady && !intentionalClientClose) {
+      onDisconnectedCallback?.();
     }
   };
 }
@@ -334,7 +404,13 @@ interface ChatEventPayload {
 function handleChatEvent(payload: ChatEventPayload | undefined) {
   if (!payload) return;
 
-  const { state, message, errorMessage } = payload;
+  const { state, message, errorMessage, runId, seq } = payload;
+
+  if (state === 'delta') {
+    const hints = inferStreamPhaseHints(message);
+    const lastToolSummary = lastToolSummaryFromStreamMessage(message);
+    onChatDeltaCallback?.({ runId, seq, hints, lastToolSummary });
+  }
 
   if (state === 'delta' || state === 'final') {
     if (message !== undefined && message !== null) {
@@ -360,7 +436,7 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
     if (errorMessage) {
       console.error(`${LOG} chat ${state}:`, errorMessage);
     }
-    onChatTerminalCallback?.(state);
+    onChatTerminalCallback?.({ state, errorMessage, runId });
   }
 }
 
@@ -423,31 +499,49 @@ export function disconnectGateway(): void {
   }
 }
 
+/** Drop the socket and open a new one (callbacks from the last `initGatewayConnection` are kept). */
+export function requestGatewayReconnect(): void {
+  disconnectGateway();
+  connect();
+}
+
 export function initGatewayConnection({
   onMessage,
   onReasoning,
   onContent,
   onAssistantFinal,
+  onChatDelta,
   onChatTerminal,
+  onAgentStreamToolHint,
   onConnected,
   onConnectError,
+  onDisconnected,
 }: {
   onMessage: (message: unknown) => void;
   onReasoning: (chunk: string) => void;
   onContent: (chunk: string) => void;
   onAssistantFinal?: (payload: ReturnType<typeof parseAssistantDisplayPayload>) => void;
-  /** Fired after `final` / `aborted` / `error` chat run states (after `onAssistantFinal` when applicable). */
-  onChatTerminal?: (state: 'final' | 'aborted' | 'error') => void;
+  /** Each `chat` event with `state: 'delta'` (before `onContent` when text is extracted). */
+  onChatDelta?: (info: ChatDeltaInfo) => void;
+  /** After `final` / `aborted` / `error` (after `onAssistantFinal` when `state === 'final'`). */
+  onChatTerminal?: (info: ChatTerminalInfo) => void;
+  /** When agent/stream events carry a tool-shaped payload but chat deltas omit tools (gateway-dependent). */
+  onAgentStreamToolHint?: (label: string) => void;
   onConnected?: () => void;
   onConnectError?: (error: string) => void;
+  /** Socket closed after a successful handshake (not a deliberate `disconnectGateway` / client close). */
+  onDisconnected?: () => void;
 }) {
   onMessageCallback = onMessage;
   onReasoningCallback = onReasoning;
   onContentCallback = onContent;
   onAssistantFinalCallback = onAssistantFinal ?? null;
+  onChatDeltaCallback = onChatDelta ?? null;
   onChatTerminalCallback = onChatTerminal ?? null;
+  onAgentStreamToolHintCallback = onAgentStreamToolHint ?? null;
   onConnectedCallback = onConnected ?? null;
   onConnectErrorCallback = onConnectError ?? null;
+  onDisconnectedCallback = onDisconnected ?? null;
   connect();
 }
 

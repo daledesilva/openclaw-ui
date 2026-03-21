@@ -2,13 +2,15 @@
 
 ## Why it exists
 
-The gateway can stream model **reasoning** separately from the main answer. Operators need a focused, dismissible surface to read that text without giving up main-column space on desktop, and they need to **reopen** reasoning after a turn finishes (when live streaming state is cleared).
+The gateway can stream model **reasoning** separately from the main answer, and chat **deltas** can carry **tool** metadata. Operators need a compact thread view: answer text in the main assistant bubble, with tools and thinking summarized in a dedicated inline bubble, plus a dismissible **modal** for reading long text.
 
 ## Conceptual model
 
-- **Live reasoning** accumulates in memory while a run is in progress (`activeReasoning` in `App.tsx`).
-- On each chat run **terminal** event (`final`, `aborted`, or `error` from the gateway `chat` event), the UI **snapshots** the current reasoning string onto the **last assistant message** in the thread so it survives the next send.
-- A **floating dialog** (MUI `Dialog`) shows reasoning; it is not a permanent side panel.
+- **`recentThoughts` buffer (live):** While a run is in progress, `App.tsx` appends **non-answer** signals to a ref-backed list (`ThoughtItem[]`): reasoning stream chunks (`onReasoning`), tool labels from `onChatDelta` / `onAgentStreamToolHint`, and (on history replay) tool results. **Answer body text** still streams only via `onContent` into the last assistant bubble.
+- **Flush on final:** When `onAssistantFinal` fires, if the buffer is non-empty **or** the final payload carries **prose reasoning** (`parseAssistantDisplayPayload` thinking), the UI inserts a **`reasoningTrace`** message **immediately above** the streaming assistant slot, then merges the final display payload into that assistant bubble. The buffer is cleared (and again on `aborted` / `error` / disconnect / new send).
+- **Live overflow:** `activeReasoning` still mirrors streamed reasoning for the header brain icon and the in-run phase bubble; completed turns expose the same content via the trace bubble and **View full reasoning** (modal).
+- **Gateway `thinking` vs UI `reasoning`:** Raw history uses content parts with `type: "thinking"`. [`parseContentParts`](src/api/gateway-types.ts) aggregates those into a string field named **`reasoning`** on [`FetchedChatMessage`](src/api/gateway-types.ts) and on live `parseAssistantDisplayPayload` output. That rename is UI-side normalization, not a second gateway event type.
+- **History fold:** [`foldFetchedHistoryToMessages`](src/utils/recentThoughtsReducer.ts) walks `chat.history` in order. For each assistant row it appends tool hints, tool results (from prior `toolresult` rows), and **`reasoning`** text as **`reasoningChunk`** items into one buffer. It emits a **`reasoningTrace`** **only immediately before** an assistant row that **displays to the user**—non-empty body text, link previews, images, or an error ([`assistantHistoryRowDisplaysToUser`](src/utils/recentThoughtsReducer.ts)). Thinking-only or tool-only assistant rows do **not** flush by themselves (avoids double trace bubbles). If the transcript ends with a non-empty buffer and no such row, a final orphan **`reasoningTrace`** is emitted. **`toolresult`** rows only extend the buffer (no separate tool bubbles).
 
 ## Flow
 
@@ -17,24 +19,31 @@ sequenceDiagram
   participant GW as Gateway
   participant API as gateway.ts
   participant UI as App.tsx
+  participant R as recentThoughtsReducer
 
   GW->>API: event chat state delta
-  API->>UI: onReasoning / onContent chunks
-  GW->>API: event chat state final|aborted|error
-  API->>UI: onAssistantFinal (final + message)
+  API->>UI: onReasoning / onChatDelta / onAgentStreamToolHint
+  UI->>UI: append ThoughtItem to recentThoughtsRef
+  API->>UI: onContent answer chunks
+  UI->>UI: append text to last assistant bubble
+  GW->>API: event chat state final
+  API->>UI: onAssistantFinal
+  UI->>R: applyAssistantFinalWithThoughtBuffer
+  R->>UI: insert reasoningTrace then merge assistant
   API->>UI: onChatTerminal
-  UI->>UI: patch last assistant Message.reasoning
-  Note over UI: Modal / View reasoning reads Message.reasoning or live buffer
+  UI->>UI: clear recentThoughtsRef
 ```
 
 ## Technical details
 
-- **Modal:** `src/components/ChainOfThoughtModal.tsx` — header, close icon, scrollable monospace body, `sanitizeDisplayText` for display.
-- **Persistence:** `src/api/gateway.ts` invokes `onChatTerminal` after handling `final` / `aborted` / `error`. `App.tsx` implements it with `patchLastAssistantWithReasoning`, using a ref (`activeReasoningRef`) so the snapshot matches the latest streamed reasoning even inside batched updates.
-- **Triggers:** Thinking state uses a clickable `ChatBubble` on **all** breakpoints; completed assistant messages with stored reasoning show **View reasoning**; the header shows a brain icon when live or historical reasoning is available.
+- **Types:** `src/chatThreadTypes.ts` — `Message`, `ThoughtItem`, `kind: 'reasoningTrace'`.
+- **Reducer:** `src/utils/recentThoughtsReducer.ts` — `appendThoughtItem` (dedupes consecutive identical tool hints), `assistantHistoryRowDisplaysToUser`, `applyAssistantFinalWithThoughtBuffer`, `foldFetchedHistoryToMessages`, `formatThoughtItemsForModal`.
+- **Inline UI:** `src/components/ReasoningTraceBubble.tsx` — bullet list of tools / results, streamed thinking and `proseReasoning`, **View full reasoning** → `ChainOfThoughtModal`.
+- **Modal:** `src/components/ChainOfThoughtModal.tsx` — `sanitizeDisplayText` for display.
+- **Triggers:** Header brain icon when `activeReasoning` or the last completed trace / legacy `Message.reasoning` has text; in-run phase bubble still uses `phaseBubbleDisplayText` (see [Agent run phase](agent-run-phase.md)).
 
 ## Technical gotchas
 
-- **React batching:** `onAssistantFinal` and `onChatTerminal` may run in the same tick; functional `setMessages` updates are applied in order so merge-then-patch stays consistent.
-- **Modal + mobile:** Dialog content uses bottom padding with `env(safe-area-inset-bottom)` to reduce overlap with home indicators; focus is managed by MUI `Dialog`.
-- **PWA / viewport:** If the modal feels clipped on a specific device, verify safe-area and browser chrome; hard refresh if a service worker serves an old bundle.
+- **`onAssistantFinal` and `onChatTerminal`** may run in the same tick; the buffer is cleared inside the `setMessages` callback for final, then again on terminal — idempotent.
+- **Prose-only final:** If the buffer is empty but `payload.reasoning` is non-empty, a trace bubble is still inserted (tools list may be empty).
+- **Modal + mobile:** Dialog content uses bottom padding with `env(safe-area-inset-bottom)`; hard refresh if a service worker serves a stale bundle.

@@ -1,5 +1,5 @@
 import { sanitizeDisplayText } from './sanitizeDisplayText';
-import type { ToolCallEntry } from '../api/gateway-types';
+import { parseContentParts, type ToolCallEntry } from '../api/gateway-types';
 
 const SUMMARY_MAX = 52;
 const QUERY_TRUNCATE = 48;
@@ -123,4 +123,84 @@ export function summarizeToolCall(entry: ToolCallEntry): string {
     ? `${entry.name}(${entry.argumentsPreview})`
     : `${entry.name}()`;
   return truncateSummary(sanitizeDisplayText(line));
+}
+
+const LOOSE_TOOL_ARGS_PREVIEW_MAX = 200;
+
+function looseToolRecordToEntry(rec: Record<string, unknown>): ToolCallEntry | null {
+  const rawName = rec.name ?? rec.toolName;
+  const name = typeof rawName === 'string' && rawName.trim() ? rawName.trim() : null;
+  if (!name) return null;
+  let argumentsPreview = '';
+  let args: Record<string, unknown> | undefined;
+  const rawArgs = rec.arguments ?? rec.args;
+  if (rawArgs && typeof rawArgs === 'object' && rawArgs !== null && !Array.isArray(rawArgs)) {
+    try {
+      const serialized = JSON.stringify(rawArgs);
+      argumentsPreview =
+        serialized.length > LOOSE_TOOL_ARGS_PREVIEW_MAX
+          ? `${serialized.slice(0, LOOSE_TOOL_ARGS_PREVIEW_MAX - 1)}…`
+          : serialized;
+      args = rawArgs as Record<string, unknown>;
+    } catch {
+      argumentsPreview = '[arguments]';
+    }
+  } else if (typeof rawArgs === 'string' && rawArgs.trim()) {
+    const s = rawArgs.trim();
+    argumentsPreview =
+      s.length > LOOSE_TOOL_ARGS_PREVIEW_MAX ? `${s.slice(0, LOOSE_TOOL_ARGS_PREVIEW_MAX - 1)}…` : s;
+  }
+  return { name, argumentsPreview, ...(args ? { arguments: args } : {}) };
+}
+
+/**
+ * Best-effort one-line tool label from `agent…` / `stream` event `payload.data` when chat deltas omit tools.
+ */
+export function toolHintFromAgentStreamData(data: unknown): string | null {
+  if (!isRecord(data)) return null;
+  const nestedKeys = ['toolCall', 'tool', 'tool_call'] as const;
+  for (const key of nestedKeys) {
+    const nested = data[key];
+    if (isRecord(nested)) {
+      const entry = looseToolRecordToEntry(nested);
+      if (entry) return summarizeToolCall(entry);
+    }
+  }
+  const top = looseToolRecordToEntry(data);
+  return top ? summarizeToolCall(top) : null;
+}
+
+/**
+ * One-line label for the **last** tool call in a chat `delta` message (same shaping as stream text / phase hints).
+ */
+export function lastToolSummaryFromStreamMessage(message: unknown): string | null {
+  if (message === undefined || message === null) return null;
+  if (typeof message === 'string') {
+    const parsed = parseContentParts(message);
+    const n = parsed.toolCalls.length;
+    const last = n > 0 ? parsed.toolCalls[n - 1] : undefined;
+    return last ? summarizeToolCall(last) : null;
+  }
+  if (!isRecord(message)) return null;
+  if (typeof message.text === 'string') {
+    const trimmed = message.text.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsedArray: unknown = JSON.parse(trimmed);
+        if (Array.isArray(parsedArray)) {
+          const parsed = parseContentParts(parsedArray);
+          const n = parsed.toolCalls.length;
+          const last = n > 0 ? parsed.toolCalls[n - 1] : undefined;
+          if (last) return summarizeToolCall(last);
+        }
+      } catch {
+        /* not JSON content parts */
+      }
+    }
+    return null;
+  }
+  const parsed = parseContentParts(message.content);
+  const n = parsed.toolCalls.length;
+  const last = n > 0 ? parsed.toolCalls[n - 1] : undefined;
+  return last ? summarizeToolCall(last) : null;
 }

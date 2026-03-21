@@ -6,9 +6,17 @@ import type { LinkPreview } from '../utils/extractLinkPreviews';
 import { MarkdownMessage } from './MarkdownMessage';
 import { SearchResultsCarousel } from './SearchResultsCarousel';
 
+export type StreamPhaseStyle = 'pending' | 'reasoning' | 'acting' | 'responding' | 'stale';
+
 const BubblePaper = styled(Paper, {
-  shouldForwardProp: (prop) => prop !== 'isUser' && prop !== 'isThinking' && prop !== 'isError',
-})<{ isUser: boolean; isThinking?: boolean; isError?: boolean }>(({ theme, isUser, isThinking, isError }) => ({
+  shouldForwardProp: (prop) =>
+    prop !== 'isUser' && prop !== 'isThinking' && prop !== 'isError' && prop !== 'streamPhase',
+})<{
+  isUser: boolean;
+  isThinking?: boolean;
+  isError?: boolean;
+  streamPhase?: StreamPhaseStyle;
+}>(({ theme, isUser, isThinking, isError, streamPhase }) => ({
   padding: theme.spacing(1.5, 2),
   maxWidth: '85%',
   width: '100%',
@@ -17,12 +25,24 @@ const BubblePaper = styled(Paper, {
   backgroundColor: isUser
     ? theme.palette.primary.main
     : isThinking
-      ? theme.palette.grey[100]
+      ? streamPhase === 'stale'
+        ? theme.palette.warning.light
+        : streamPhase === 'acting'
+          ? theme.palette.info.light
+          : streamPhase === 'responding'
+            ? theme.palette.background.paper
+            : theme.palette.grey[100]
       : theme.palette.background.paper,
   color: isUser
     ? theme.palette.primary.contrastText
     : isThinking
-      ? theme.palette.text.secondary
+      ? streamPhase === 'stale'
+        ? theme.palette.warning.contrastText
+        : streamPhase === 'acting'
+          ? theme.palette.info.contrastText
+          : streamPhase === 'responding'
+            ? theme.palette.text.primary
+            : theme.palette.text.secondary
       : isError
         ? theme.palette.error.dark
         : theme.palette.text.primary,
@@ -50,6 +70,8 @@ interface ChatBubbleProps {
   caption?: string;
   /** Assistant message that is only an error / failure */
   isError?: boolean;
+  /** When `isThinking`, distinguishes run phase for colour hints */
+  streamPhase?: StreamPhaseStyle;
   /** Opens chain-of-thought modal for this message (assistant bubbles with saved reasoning) */
   onViewReasoning?: () => void;
 }
@@ -68,6 +90,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
   onClick,
   caption,
   isError,
+  streamPhase = 'reasoning',
   onViewReasoning,
 }) => {
   const isUser = role === 'user';
@@ -88,7 +111,13 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
       }}
       onClick={onClick}
     >
-      <BubblePaper isUser={isUser} isThinking={isThinking} isError={isError} elevation={0}>
+      <BubblePaper
+        isUser={isUser}
+        isThinking={isThinking}
+        isError={isError}
+        streamPhase={isThinking ? streamPhase : undefined}
+        elevation={0}
+      >
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, minWidth: 0, maxWidth: '100%' }}>
           {isThinking && <CircularProgress size={16} color="inherit" sx={{ mt: 0.25, flexShrink: 0 }} />}
           <Box sx={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>
@@ -96,11 +125,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
               <MarkdownMessage tone={tone} isError={isError}>
                 {safeContent}
               </MarkdownMessage>
-            ) : isThinking ? (
-              <Typography variant="body1" sx={{ fontStyle: 'italic', color: 'inherit' }}>
-                …
-              </Typography>
-            ) : (
+            ) : isThinking ? null : (
               <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
                 …
               </Typography>

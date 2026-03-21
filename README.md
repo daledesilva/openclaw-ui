@@ -186,3 +186,7 @@ Bump **`MAJOR.MINOR.PATCH`** only by editing **`package.json`** / **`npm version
 See the [docs folder](docs/) for stack choices, component patterns, and design notes.
 
 **Chain of thought:** Reasoning streams in a **dismissible dialog** (not a side drawer). After each run ends, reasoning is stored on the assistant message so you can use **View reasoning** or the header icon on later turns. Details: [docs/chain-of-thought.md](docs/chain-of-thought.md).
+
+**Agent run phase:** Header chips and the phase bubble (spinner + reasoning or **last tool label**) cover the in-flight run; the phase bubble hides while the answer streams in the main assistant bubble, and the current turn does not add separate tool-call bubbles. Details: [docs/agent-run-phase.md](docs/agent-run-phase.md).
+
+**New chat:** Header control starts a **new gateway session** (new `sessionKey` in browser storage) and reloads history for that key. Details: [docs/new-chat-session.md](docs/new-chat-session.md).

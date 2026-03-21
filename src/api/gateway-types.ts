@@ -378,3 +378,40 @@ export function extractStreamText(message: unknown): string {
   const parsed = parseContentParts(message.content);
   return sanitizeDisplayText(parsed.body);
 }
+
+/** Hints for UI run phase (delta payloads); heuristic when the gateway omits explicit tool phases. */
+export interface StreamPhaseHints {
+  hasAssistantText: boolean;
+  hasThinking: boolean;
+  hasToolCalls: boolean;
+}
+
+/**
+ * Derive phase hints from a chat `delta` message shape (mirrors {@link extractStreamText} unpacking).
+ */
+export function inferStreamPhaseHints(message: unknown): StreamPhaseHints {
+  if (message === undefined || message === null) {
+    return { hasAssistantText: false, hasThinking: false, hasToolCalls: false };
+  }
+  if (typeof message === 'string') {
+    const parsed = parseContentParts(message);
+    return {
+      hasAssistantText: !!parsed.body.trim(),
+      hasThinking: !!parsed.reasoning.trim(),
+      hasToolCalls: parsed.toolCalls.length > 0 || parsed.toolLines.length > 0,
+    };
+  }
+  if (!isRecord(message)) {
+    return { hasAssistantText: false, hasThinking: false, hasToolCalls: false };
+  }
+  if (typeof message.text === 'string') {
+    const body = sanitizeDisplayText(stripFinalEnvelope(message.text)).trim();
+    return { hasAssistantText: body.length > 0, hasThinking: false, hasToolCalls: false };
+  }
+  const parsed = parseContentParts(message.content);
+  return {
+    hasAssistantText: !!parsed.body.trim(),
+    hasThinking: !!parsed.reasoning.trim(),
+    hasToolCalls: parsed.toolCalls.length > 0 || parsed.toolLines.length > 0,
+  };
+}
