@@ -79,13 +79,10 @@ import { useLiveAppVersion } from './useLiveAppVersion';
 import { sanitizeDisplayText } from './utils/sanitizeDisplayText';
 import { sumMessageEstimatedUsd } from './utils/geminiPricingEstimate';
 import {
-  type AgentRunActivity,
-  inputPlaceholderForActivity,
-  isAgentRunBlockingInput,
-  nextActivityFromContentChunk,
-  nextActivityFromDeltaHints,
-  nextActivityFromReasoningChunk,
-} from './utils/agentRunActivity';
+  type AssistantRunChromeState,
+  inputPlaceholderForAssistantRun,
+  isAssistantRunBlockingInput,
+} from './utils/assistantRunChrome';
 
 export type { Message } from './chatThreadTypes';
 
@@ -102,8 +99,8 @@ export default function App() {
   const appVersion = useLiveAppVersion();
   const [tokenReady, setTokenReady] = useState(hasGatewayToken());
   const [messages, setMessages] = useState<Message[]>([]);
-  const [agentActivity, setAgentActivity] = useState<AgentRunActivity>('idle');
-  const agentActivityRef = useRef<AgentRunActivity>('idle');
+  const [assistantRunChrome, setAssistantRunChrome] = useState<AssistantRunChromeState>('idle');
+  const assistantRunChromeRef = useRef<AssistantRunChromeState>('idle');
   const [runTerminalNotice, setRunTerminalNotice] = useState<RunTerminalNotice | null>(null);
   const lastStreamActivityAtRef = useRef<number>(Date.now());
   const [cotOpen, setCotOpen] = useState(false);
@@ -270,8 +267,8 @@ export default function App() {
   }, [activeThread?.threadId, connectionStatus, scheduleRefreshGatewaySessionTokens]);
 
   useEffect(() => {
-    agentActivityRef.current = agentActivity;
-  }, [agentActivity]);
+    assistantRunChromeRef.current = assistantRunChrome;
+  }, [assistantRunChrome]);
 
   const touchStreamActivity = () => {
     lastStreamActivityAtRef.current = Date.now();
@@ -291,15 +288,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (agentActivity === 'idle' || agentActivity === 'stale') return;
+    if (assistantRunChrome === 'idle' || assistantRunChrome === 'stale') return;
     const tick = () => {
       if (Date.now() - lastStreamActivityAtRef.current >= AGENT_RUN_STALE_AFTER_MS) {
-        setAgentActivity('stale');
+        setAssistantRunChrome('stale');
       }
     };
     const id = window.setInterval(tick, 4000);
     return () => window.clearInterval(id);
-  }, [agentActivity]);
+  }, [assistantRunChrome]);
 
   useEffect(() => {
     if (!tokenReady) return;
@@ -320,7 +317,6 @@ export default function App() {
       },
       onReasoning: (chunk) => {
         touchStreamActivity();
-        setAgentActivity((prev) => nextActivityFromReasoningChunk(prev));
         const safe = sanitizeDisplayText(chunk);
         appendLiveThoughtItem({
           kind: 'reasoningChunk',
@@ -329,7 +325,6 @@ export default function App() {
       },
       onChatDelta: (info) => {
         touchStreamActivity();
-        setAgentActivity((prev) => nextActivityFromDeltaHints(prev, info.hints));
         if (info.lastToolSummary) {
           appendLiveThoughtItem({
             kind: 'toolHint',
@@ -349,7 +344,6 @@ export default function App() {
       },
       onContent: (chunk) => {
         touchStreamActivity();
-        setAgentActivity((prev) => nextActivityFromContentChunk(prev));
         const safe = sanitizeDisplayText(chunk);
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1];
@@ -375,7 +369,7 @@ export default function App() {
         );
       },
       onChatTerminal: (info) => {
-        setAgentActivity('idle');
+        setAssistantRunChrome('idle');
         recentThoughtsRef.current = [];
         setThoughtBufferRevision((r) => r + 1);
         touchStreamActivity();
@@ -412,7 +406,7 @@ export default function App() {
       onDisconnected: () => {
         setConnectionStatus('disconnected');
         setConnectionError('Disconnected from gateway.');
-        setAgentActivity('idle');
+        setAssistantRunChrome('idle');
         recentThoughtsRef.current = [];
         setThoughtBufferRevision((r) => r + 1);
       },
@@ -447,7 +441,7 @@ export default function App() {
     recentThoughtsRef.current = [];
     setThoughtBufferRevision((r) => r + 1);
     setRunTerminalNotice(null);
-    setAgentActivity('idle');
+    setAssistantRunChrome('idle');
     setCotOpen(false);
     setCotModalPayload(null);
     lastStreamActivityAtRef.current = Date.now();
@@ -522,7 +516,7 @@ export default function App() {
     recentThoughtsRef.current = [];
     setThoughtBufferRevision((r) => r + 1);
     setRunTerminalNotice(null);
-    setAgentActivity('pending');
+    setAssistantRunChrome('running');
     touchStreamActivity();
 
     const aiMsgId = (Date.now() + 1).toString();
@@ -571,7 +565,7 @@ export default function App() {
               aria-label="New conversation"
               disabled={
                 connectionStatus !== 'ready' ||
-                isAgentRunBlockingInput(agentActivity) ||
+                isAssistantRunBlockingInput(assistantRunChrome) ||
                 sessionKeyPinnedByBuild ||
                 newConversationBusy
               }
@@ -867,7 +861,7 @@ export default function App() {
         >
           {messages.map((msg) =>
             msg.role === 'user' ? (
-              <UserChatBubble key={msg.id} message={msg} />
+              <UserChatBubble key={msg.id} messageText={msg.content} />
             ) : (
               <AgentChatBubble
                 key={msg.id}
@@ -882,8 +876,8 @@ export default function App() {
         <Box sx={{ p: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>
           <MessageInput
             onSend={handleSend}
-            disabled={connectionStatus !== 'ready' || isAgentRunBlockingInput(agentActivity)}
-            placeholder={inputPlaceholderForActivity(agentActivity, connectionStatus)}
+            disabled={connectionStatus !== 'ready' || isAssistantRunBlockingInput(assistantRunChrome)}
+            placeholder={inputPlaceholderForAssistantRun(assistantRunChrome, connectionStatus)}
           />
         </Box>
       </Box>

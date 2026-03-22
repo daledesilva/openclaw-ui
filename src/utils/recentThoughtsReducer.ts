@@ -78,8 +78,6 @@ export function mergeAssistantFinalIntoMessages(
     ...last,
     kind: 'assistant',
     content: payload.content,
-    imageUrls: payload.imageUrls.length ? payload.imageUrls : undefined,
-    linkPreviews: payload.linkPreviews.length ? payload.linkPreviews : undefined,
     isError: payload.isError,
     ...(payload.estimatedCostUsd !== undefined
       ? { estimatedCostUsd: payload.estimatedCostUsd }
@@ -112,17 +110,12 @@ export function applyAssistantFinalWithThoughtBuffer(
 
 /**
  * True when this assistant history row would show something in the main assistant bubble
- * (user-visible body, media, link previews, or error). Not tool-only or thinking-only rows.
+ * (user-visible body or error). Not tool-only or thinking-only rows.
  */
 export function assistantHistoryRowDisplaysToUser(msg: FetchedChatMessage): boolean {
   const role = msg.role.toLowerCase();
   if (role !== 'assistant' && role !== 'ai') return false;
-  return (
-    msg.content.trim().length > 0 ||
-    (msg.linkPreviews?.length ?? 0) > 0 ||
-    (msg.imageUrls?.length ?? 0) > 0 ||
-    !!msg.isError
-  );
+  return msg.content.trim().length > 0 || !!msg.isError;
 }
 
 /**
@@ -190,8 +183,6 @@ export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Mes
         senderLabel: msg.senderLabel,
         timestamp: msg.timestamp,
         isError: msg.isError,
-        imageUrls: msg.imageUrls,
-        linkPreviews: msg.linkPreviews,
         ...costField,
       });
       return;
@@ -205,8 +196,6 @@ export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Mes
       senderLabel: msg.senderLabel,
       timestamp: msg.timestamp,
       isError: msg.isError,
-      imageUrls: msg.imageUrls,
-      linkPreviews: msg.linkPreviews,
     });
   });
 

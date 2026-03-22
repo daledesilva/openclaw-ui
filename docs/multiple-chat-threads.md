@@ -65,4 +65,4 @@ When **`VITE_OPENCLAW_SESSION_KEY`** is set, the gateway session is fixed. The U
 ## Related documentation
 
 - [New chat session](new-chat-session.md) — history of session rotation and env pin.
-- [Agent run phase](agent-run-phase.md) — new conversation disabled while a run blocks input.
+- [Assistant run chrome](assistant-run-chrome.md) — new conversation disabled while a run blocks input.

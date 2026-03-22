@@ -26,7 +26,7 @@ This document outlines the key architectural choices made for the `openclaw-ui` 
 ## 5. Pattern: Custom Component Wrappers
 
 - **Atoms:** Shared styled shells used by multiple feature components live under `src/components/atoms/` (e.g. `ChatBubblePaper` for user and agent chat bubbles).
-- **Strategy:** Every MUI component used in the application is wrapped within a custom component (e.g., `UserChatBubble.tsx`, `AgentChatBubble.tsx`, `MessageInput.tsx`).
+- **Strategy:** Every MUI component used in the application is wrapped within a custom component (e.g., `UserChatBubble.tsx`, `AgentChatBubble.tsx`, `MessageInput.tsx`). Chat bubbles take **primitive props** (`messageText`, `thoughtItems`, …); the app shell uses **`AssistantRunChromeState`** (`idle` / `running` / `stale`) only for input lock and placeholders—not for bubble copy. There is **no** link-preview carousel or inline image strip in the thread.
 - **Rationale:** This is the most critical architectural decision for long-term maintainability.
   - **Mass Customization:** It creates a single point of control for styling and behavior. If we need to change how all chat bubbles look, we only edit one file.
   - **Decoupling:** It decouples our application from MUI's specific API. If we were to ever switch component libraries, we would only need to update our wrapper components, not every instance of a component throughout the app.

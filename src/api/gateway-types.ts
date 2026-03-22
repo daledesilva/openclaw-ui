@@ -1,14 +1,10 @@
 import { formatGatewayErrorForDisplay, sanitizeDisplayText } from '../utils/sanitizeDisplayText';
 import {
-  type LinkPreview,
-  extractLinkPreviewsFromParsedJson,
-  extractLinkPreviewsFromTextSegment,
-  stripLeadingLinkListJsonFromBody,
-} from '../utils/extractLinkPreviews';
-import { extractLinkPreviewsFromGeminiWebSearchPayload } from '../utils/extractGeminiWebSearchPreviews';
+  isGeminiWebSearchToolEnvelope,
+  parsedJsonIsLinkOrSearchResultList,
+  stripLeadingNonBodyJsonBlocks,
+} from '../utils/nonBodyChatJson';
 import { estimateUsdFromUsage } from '../utils/geminiPricingEstimate';
-
-export type { LinkPreview } from '../utils/extractLinkPreviews';
 
 /** Content blocks as returned by chat.history / agent payloads */
 export type ChatContentPart =
@@ -20,7 +16,6 @@ export type ChatContentPart =
 
 const MAX_TOOL_MICRO = 120;
 const MAX_TOOL_ARGS_JSON_CHARS = 120_000;
-const MAX_LINK_PREVIEWS = 20;
 
 export interface ToolCallEntry {
   name: string;
@@ -38,10 +33,6 @@ export interface ParsedContentParts {
   toolLines: string[];
   /** Structured tool rows for compact bubbles */
   toolCalls: ToolCallEntry[];
-  /** HTTP(S) or data:image URLs from image parts */
-  imageUrls: string[];
-  /** Extracted search / link-list previews */
-  linkPreviews: LinkPreview[];
 }
 
 /** Strip Gemini-style `<final>…</final>` wrapper when it wraps the whole payload. */
@@ -82,52 +73,23 @@ function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null;
 }
 
-function allowImageUrl(url: string): string | null {
-  const u = url.trim();
-  if (u.startsWith('https://') || u.startsWith('http://')) return u;
-  if (u.startsWith('data:image/')) return u;
-  return null;
-}
-
-function extractImageUrlFromPart(raw: Record<string, unknown>): string | null {
-  const type = raw.type;
-  if (type === 'image') {
-    if (typeof raw.url === 'string') return allowImageUrl(raw.url);
-    const nested = raw.image_url;
-    if (isRecord(nested) && typeof nested.url === 'string') return allowImageUrl(nested.url);
-  }
-  if (type === 'image_url') {
-    const nested = raw.image_url;
-    if (isRecord(nested) && typeof nested.url === 'string') return allowImageUrl(nested.url);
-  }
-  return null;
-}
-
 function normalizeTextForBody(raw: string): string {
   return sanitizeDisplayText(stripFinalEnvelope(raw));
 }
 
-function mergeLinkPreviews(target: LinkPreview[], more: LinkPreview[]): void {
-  const seen = new Set(target.map((p) => p.url));
-  for (const p of more) {
-    if (seen.has(p.url) || target.length >= MAX_LINK_PREVIEWS) continue;
-    seen.add(p.url);
-    target.push(p);
-  }
-}
-
-function ingestTextSegment(
-  segment: string,
-  textBits: string[],
-  linkAccumulator: LinkPreview[]
-): void {
+function ingestTextSegment(segment: string, textBits: string[]): void {
   const normalized = normalizeTextForBody(segment);
   if (!normalized.trim()) return;
-
-  const { links, consumed } = extractLinkPreviewsFromTextSegment(normalized);
-  if (consumed) {
-    mergeLinkPreviews(linkAccumulator, links);
-    return;
+  const trimmed = normalized.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (isGeminiWebSearchToolEnvelope(parsed) || parsedJsonIsLinkOrSearchResultList(parsed)) {
+        return;
+      }
+    } catch {
+      /* keep as prose */
+    }
   }
   textBits.push(normalized);
 }
@@ -138,52 +100,36 @@ export function parseContentParts(content: unknown): ParsedContentParts {
   const toolCalls: ToolCallEntry[] = [];
   const textBits: string[] = [];
   const thinkingBits: string[] = [];
-  const imageUrls: string[] = [];
-  const linkPreviews: LinkPreview[] = [];
-  const seenUrls = new Set<string>();
+  const empty = (): ParsedContentParts => ({ body: '', reasoning: '', toolLines, toolCalls });
 
   if (typeof content === 'string') {
     const normalized = normalizeTextForBody(content);
     const trimmedStart = normalized.trim();
-    if (trimmedStart.startsWith('{')) {
+    if (!trimmedStart) return empty();
+    if (trimmedStart.startsWith('{') || trimmedStart.startsWith('[')) {
       try {
         const parsedObject: unknown = JSON.parse(trimmedStart);
-        if (isRecord(parsedObject)) {
-          mergeLinkPreviews(linkPreviews, extractLinkPreviewsFromGeminiWebSearchPayload(parsedObject));
-          if (linkPreviews.length > 0) {
-            return { body: '', reasoning: '', toolLines, toolCalls, imageUrls, linkPreviews };
-          }
+        if (
+          isRecord(parsedObject) &&
+          (isGeminiWebSearchToolEnvelope(parsedObject) || parsedJsonIsLinkOrSearchResultList(parsedObject))
+        ) {
+          return empty();
         }
       } catch {
         /* not JSON; fall through */
       }
     }
-    if (normalized.trim()) {
-      const { links, consumed } = extractLinkPreviewsFromTextSegment(normalized);
-      if (consumed) {
-        mergeLinkPreviews(linkPreviews, links);
-        return { body: '', reasoning: '', toolLines, toolCalls, imageUrls, linkPreviews };
-      }
-      ingestTextSegment(content, textBits, linkPreviews);
-    }
-    let body = textBits.join('\n\n');
-    const stripped = stripLeadingLinkListJsonFromBody(body);
-    body = stripped.body;
-    mergeLinkPreviews(linkPreviews, stripped.links);
-    return { body, reasoning: '', toolLines, toolCalls, imageUrls, linkPreviews };
+    ingestTextSegment(content, textBits);
+    const body = stripLeadingNonBodyJsonBlocks(textBits.join('\n\n'));
+    return { body, reasoning: '', toolLines, toolCalls };
   }
 
   if (Array.isArray(content)) {
     for (const raw of content) {
       if (!isRecord(raw)) continue;
       const type = raw.type;
-      const img = extractImageUrlFromPart(raw);
-      if (img && !seenUrls.has(img)) {
-        seenUrls.add(img);
-        imageUrls.push(img);
-      }
       if (type === 'text' && typeof raw.text === 'string' && raw.text.trim()) {
-        ingestTextSegment(raw.text, textBits, linkPreviews);
+        ingestTextSegment(raw.text, textBits);
       } else if (type === 'thinking' && typeof raw.thinking === 'string' && raw.thinking.trim()) {
         thinkingBits.push(sanitizeDisplayText(raw.thinking));
       } else if (type === 'toolCall') {
@@ -194,23 +140,18 @@ export function parseContentParts(content: unknown): ParsedContentParts {
       }
     }
 
-    let body = textBits.join('\n\n');
-    const stripped = stripLeadingLinkListJsonFromBody(body);
-    body = stripped.body;
-    mergeLinkPreviews(linkPreviews, stripped.links);
+    const body = stripLeadingNonBodyJsonBlocks(textBits.join('\n\n'));
     const reasoning = thinkingBits.join('\n\n');
-    return { body, reasoning, toolLines, toolCalls, imageUrls, linkPreviews };
+    return { body, reasoning, toolLines, toolCalls };
   }
 
   if (isRecord(content)) {
-    mergeLinkPreviews(linkPreviews, extractLinkPreviewsFromGeminiWebSearchPayload(content));
-    if (linkPreviews.length === 0) {
-      mergeLinkPreviews(linkPreviews, extractLinkPreviewsFromParsedJson(content));
+    if (isGeminiWebSearchToolEnvelope(content) || parsedJsonIsLinkOrSearchResultList(content)) {
+      return empty();
     }
-    return { body: '', reasoning: '', toolLines, toolCalls, imageUrls, linkPreviews };
   }
 
-  return { body: '', reasoning: '', toolLines, toolCalls, imageUrls, linkPreviews };
+  return empty();
 }
 
 /** Build main bubble text from parsed parts + optional tool summary lines */
@@ -249,8 +190,6 @@ export interface FetchedChatMessage {
   senderLabel?: string;
   timestamp?: number;
   isError?: boolean;
-  imageUrls?: string[];
-  linkPreviews?: LinkPreview[];
   toolCalls?: ToolCallEntry[];
   /** Present for `toolresult` rows */
   toolName?: string;
@@ -271,8 +210,6 @@ export interface ChatHistoryResponse {
 export interface AssistantDisplayPayload {
   content: string;
   reasoning: string;
-  linkPreviews: LinkPreview[];
-  imageUrls: string[];
   toolCalls: ToolCallEntry[];
   isError?: boolean;
   estimatedCostUsd?: number;
@@ -307,7 +244,6 @@ export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
   const role = (m.role ?? 'user').toLowerCase();
 
   if (role === 'toolresult') {
-    const parsed = parseContentParts(m.content);
     const toolName =
       typeof m.toolName === 'string' && m.toolName.trim() ? sanitizeDisplayText(m.toolName.trim()) : 'tool';
     return {
@@ -320,7 +256,6 @@ export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
         typeof m.senderLabel === 'string' ? sanitizeDisplayText(m.senderLabel) : undefined,
       timestamp: typeof m.timestamp === 'number' ? m.timestamp : undefined,
       isError: !!m.isError,
-      imageUrls: parsed.imageUrls.length ? parsed.imageUrls : undefined,
     };
   }
 
@@ -348,8 +283,6 @@ export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
       typeof m.senderLabel === 'string' ? sanitizeDisplayText(m.senderLabel) : undefined,
     timestamp: typeof m.timestamp === 'number' ? m.timestamp : undefined,
     isError,
-    imageUrls: parsed.imageUrls.length ? parsed.imageUrls : undefined,
-    linkPreviews: parsed.linkPreviews.length ? parsed.linkPreviews : undefined,
     toolCalls: parsed.toolCalls.length ? parsed.toolCalls : undefined,
     ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
     ...(modelRef !== undefined ? { modelRef } : {}),
@@ -398,8 +331,6 @@ export function parseAssistantDisplayPayload(
   return {
     content,
     reasoning: parsed.reasoning,
-    linkPreviews: parsed.linkPreviews,
-    imageUrls: parsed.imageUrls,
     toolCalls: parsed.toolCalls,
     isError: isError || undefined,
     ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
@@ -419,39 +350,3 @@ export function extractStreamText(message: unknown): string {
   return sanitizeDisplayText(parsed.body);
 }
 
-/** Hints for UI run phase (delta payloads); heuristic when the gateway omits explicit tool phases. */
-export interface StreamPhaseHints {
-  hasAssistantText: boolean;
-  hasThinking: boolean;
-  hasToolCalls: boolean;
-}
-
-/**
- * Derive phase hints from a chat `delta` message shape (mirrors {@link extractStreamText} unpacking).
- */
-export function inferStreamPhaseHints(message: unknown): StreamPhaseHints {
-  if (message === undefined || message === null) {
-    return { hasAssistantText: false, hasThinking: false, hasToolCalls: false };
-  }
-  if (typeof message === 'string') {
-    const parsed = parseContentParts(message);
-    return {
-      hasAssistantText: !!parsed.body.trim(),
-      hasThinking: !!parsed.reasoning.trim(),
-      hasToolCalls: parsed.toolCalls.length > 0 || parsed.toolLines.length > 0,
-    };
-  }
-  if (!isRecord(message)) {
-    return { hasAssistantText: false, hasThinking: false, hasToolCalls: false };
-  }
-  if (typeof message.text === 'string') {
-    const body = sanitizeDisplayText(stripFinalEnvelope(message.text)).trim();
-    return { hasAssistantText: body.length > 0, hasThinking: false, hasToolCalls: false };
-  }
-  const parsed = parseContentParts(message.content);
-  return {
-    hasAssistantText: !!parsed.body.trim(),
-    hasThinking: !!parsed.reasoning.trim(),
-    hasToolCalls: parsed.toolCalls.length > 0 || parsed.toolLines.length > 0,
-  };
-}

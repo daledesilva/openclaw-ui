@@ -101,15 +101,15 @@ When a function takes a single **`props`** object, declare its shape as a **name
 
 ```tsx
 export interface AgentChatBubbleProps {
-  message: Message;
+  messageText: string;
   thoughtItems: ThoughtItem[];
-  openChainOfThoughtModal: (content: ChainOfThoughtModalContent) => void;
+  openChainOfThoughtModal?: (content: ChainOfThoughtModalContent) => void;
 }
 
 /** Renders the agent message bubble and chain-of-thought entry. */
-export const AgentChatBubble: React.FC<AgentChatBubbleProps> = (props) => {
-    // use props.message, props.thoughtItems, etc.
-};
+export function AgentChatBubble(props: AgentChatBubbleProps): React.ReactNode {
+  // use props.messageText, props.thoughtItems, etc.
+}
 ```
 
 ## Function declarations and file layout
@@ -165,7 +165,7 @@ For **non-trivial** `sx` (multi-property, theme callbacks, or repeated in the fi
 // =============================================================================
 ```
 
-Import **`SxProps`** and **`Theme`** from **`@mui/material/styles`**. Use a **file-scoped name prefix** (e.g. `agentBubbleChromeOuterSx`). See **`.cursor/rules/mui-sx-styles-section.mdc`**.
+Import **`SxProps`** and **`Theme`** from **`@mui/material/styles`**. **`export`ed** `sx` constants: **file-scoped prefix**. **Private** `sx` in a single-primary-component file: **role** names (`outerSx`), no redundant component/filename unless disambiguating. See **`.cursor/rules/mui-sx-styles-section.mdc`** and **`.cursor/rules/naming-conventions.mdc`**.
 
 ## No Raw Inline Styles Except Dynamic Values
 

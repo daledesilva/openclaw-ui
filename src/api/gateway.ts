@@ -9,10 +9,8 @@ import {
   type FetchedChatMessage,
   type RawHistoryMessage,
   extractStreamText,
-  inferStreamPhaseHints,
   mapRawHistoryMessage,
   parseAssistantDisplayPayload,
-  type StreamPhaseHints,
 } from './gateway-types';
 import { lastToolSummaryFromStreamMessage, toolHintFromAgentStreamData } from '../utils/toolBubbleSummary';
 import { chatSessionKeysMatchForRouting } from './gatewaySessionsList';
@@ -29,11 +27,10 @@ export interface ChatTerminalInfo {
   runId?: string;
 }
 
-/** Per-`delta` chat event: structured hints for inferring tool vs answer vs thinking in the stream. */
+/** Per-`delta` chat event: tool summary for live thought buffer (no app-wide stream typing). */
 export interface ChatDeltaInfo {
   runId?: string;
   seq?: number;
-  hints: StreamPhaseHints;
   /** Collapsed label for the last `toolCall` part in this delta, if any. */
   lastToolSummary: string | null;
 }
@@ -425,9 +422,8 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
   const { state, message, errorMessage, runId, seq } = payload;
 
   if (state === 'delta') {
-    const hints = inferStreamPhaseHints(message);
     const lastToolSummary = lastToolSummaryFromStreamMessage(message);
-    onChatDeltaCallback?.({ runId, seq, hints, lastToolSummary });
+    onChatDeltaCallback?.({ runId, seq, lastToolSummary });
   }
 
   if (state === 'delta' || state === 'final') {

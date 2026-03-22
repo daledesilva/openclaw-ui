@@ -1,5 +1,3 @@
-import type { LinkPreview } from './api/gateway-types';
-
 export type MessageBubbleKind = 'assistant' | 'reasoningTrace';
 
 /** Buffered non-answer signals; flushed into a `reasoningTrace` message on assistant final. */
@@ -18,8 +16,6 @@ export interface Message {
   senderLabel?: string;
   timestamp?: number;
   isError?: boolean;
-  imageUrls?: string[];
-  linkPreviews?: LinkPreview[];
   /** When `kind === 'reasoningTrace'`: items shown as a tool/thinking trace list */
   thoughtItems?: ThoughtItem[];
   /** Structured thinking from final parse or history, shown in the trace bubble */

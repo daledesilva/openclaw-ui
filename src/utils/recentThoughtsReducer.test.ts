@@ -129,8 +129,6 @@ describe('applyAssistantFinalWithThoughtBuffer', () => {
     const payload: AssistantDisplayPayload = {
       content: 'final answer',
       reasoning: '',
-      linkPreviews: [],
-      imageUrls: [],
       toolCalls: [],
     };
     const next = applyAssistantFinalWithThoughtBuffer(
@@ -149,8 +147,6 @@ describe('applyAssistantFinalWithThoughtBuffer', () => {
     const payload: AssistantDisplayPayload = {
       content: 'y',
       reasoning: '',
-      linkPreviews: [],
-      imageUrls: [],
       toolCalls: [],
     };
     const next = applyAssistantFinalWithThoughtBuffer(prev, payload, [], 'tr');
@@ -163,8 +159,6 @@ describe('applyAssistantFinalWithThoughtBuffer', () => {
     const payload: AssistantDisplayPayload = {
       content: 'ans',
       reasoning: 'model thinking',
-      linkPreviews: [],
-      imageUrls: [],
       toolCalls: [],
     };
     const next = applyAssistantFinalWithThoughtBuffer(prev, payload, [], 'tr');
@@ -180,8 +174,6 @@ describe('mergeAssistantFinalIntoMessages', () => {
     const payload: AssistantDisplayPayload = {
       content: 'new',
       reasoning: '',
-      linkPreviews: [],
-      imageUrls: [],
       toolCalls: [],
     };
     const next = mergeAssistantFinalIntoMessages(prev, payload);

@@ -28,7 +28,7 @@ Place them at the **bottom** of the file, **after** the primary component and **
 
 ## Naming and typing
 
-- Use a **file-scoped prefix** so names stay unique and searchable (e.g. `agentBubbleChromeOuterSx`, `thoughtProcessLinkSx`).
+- **`export`ed** `sx` constants (consumed from other files) **should** use a **file-scoped prefix**. **Module-private** `sx` in a single-primary-component file: name by **layout or role** (`outerSx`) without repeating the component or filename — see **`.cursor/rules/naming-conventions.mdc`** (File scope: exported vs module-private). Use a longer or prefixed private name only when the file has **multiple components** or **ambiguous** locals.
 - Type theme-aware objects as **`SxProps<Theme>`** and import **`Theme`** (and **`SxProps`**) from **`@mui/material/styles`**.
 
 ```tsx

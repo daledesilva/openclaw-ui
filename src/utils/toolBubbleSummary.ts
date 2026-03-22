@@ -171,7 +171,7 @@ export function toolHintFromAgentStreamData(data: unknown): string | null {
 }
 
 /**
- * One-line label for the **last** tool call in a chat `delta` message (same shaping as stream text / phase hints).
+ * One-line label for the **last** tool call in a chat `delta` message (same shaping as stream text / content parsing).
  */
 export function lastToolSummaryFromStreamMessage(message: unknown): string | null {
   if (message === undefined || message === null) return null;

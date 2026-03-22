@@ -36,4 +36,4 @@ sequenceDiagram
 ## Related documentation
 
 - [Multiple chat threads](multiple-chat-threads.md) — thread model, routing, storage.
-- [Agent run phase](agent-run-phase.md) — New conversation is disabled while a run is in progress.
+- [Assistant run chrome](assistant-run-chrome.md) — New conversation is disabled while a run is in progress.

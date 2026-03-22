@@ -23,8 +23,6 @@ function isTrailingEmptyAssistantPlaceholder(message: Message): boolean {
     message.role === 'ai' &&
     (!message.kind || message.kind === 'assistant') &&
     !message.content.trim() &&
-    !(message.imageUrls?.length) &&
-    !(message.linkPreviews?.length) &&
     !message.isError
   );
 }

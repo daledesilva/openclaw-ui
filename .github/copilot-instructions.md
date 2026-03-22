@@ -20,7 +20,7 @@ These instructions apply to all files in this repository.
 | `public/` | Static assets |
 | `docs/` | Optional deeper documentation (README is the deploy playbook) |
 
-**Architecture:** SPA connects to the OpenClaw gateway via **`VITE_OPENCLAW_GATEWAY_URL`**. Production builds often omit that var so the WS URL follows the page origin. Chat UI folds gateway streams through a **`recentThoughts`** buffer and **`applyAssistantFinalWithThoughtBuffer`** (`src/utils/recentThoughtsReducer.ts`); tools and tool results are not separate chat bubbles—they appear in the chain-of-thought modal; persisted trace data uses a **`reasoningTrace`** message merged into the assistant **`AgentChatBubble`** in the UI. Per-thread token totals use WebSocket **`sessions.list`** (`fetchGatewaySessionsList`, `src/api/gatewaySessionsList.ts`); canonical `agent:<id>:…` keys are aliased to short UI `sessionKey` values. **`usage.cost`** (`fetchGatewayUsageCost`, `src/api/gatewayUsageCost.ts`) can supply per-session USD on conversation rows when parseable; the top bar shows a **client-side Gemini session total** (~$X.XX, two decimals) for the active chat (not gateway rollups). See **`docs/gemini-pricing-estimates.md`**. See **`docs/chain-of-thought.md`**, **`docs/agent-run-phase.md`**, and **`docs/multiple-chat-threads.md`**. GitHub Actions can trigger **`deploy:local`** on a host via **`webhook:deploy`** (see README).
+**Architecture:** SPA connects to the OpenClaw gateway via **`VITE_OPENCLAW_GATEWAY_URL`**. Production builds often omit that var so the WS URL follows the page origin. Chat UI folds gateway streams through a **`recentThoughts`** buffer and **`applyAssistantFinalWithThoughtBuffer`** (`src/utils/recentThoughtsReducer.ts`); tools and tool results are not separate chat bubbles—they appear in the chain-of-thought modal; persisted trace data uses a **`reasoningTrace`** message merged into the assistant **`AgentChatBubble`** in the UI. Per-thread token totals use WebSocket **`sessions.list`** (`fetchGatewaySessionsList`, `src/api/gatewaySessionsList.ts`); canonical `agent:<id>:…` keys are aliased to short UI `sessionKey` values. **`usage.cost`** (`fetchGatewayUsageCost`, `src/api/gatewayUsageCost.ts`) can supply per-session USD on conversation rows when parseable; the top bar shows a **client-side Gemini session total** (~$X.XX, two decimals) for the active chat (not gateway rollups). See **`docs/gemini-pricing-estimates.md`**. See **`docs/chain-of-thought.md`**, **`docs/assistant-run-chrome.md`**, and **`docs/multiple-chat-threads.md`**. Shell state is **`idle` / `running` / `stale`** (`src/utils/assistantRunChrome.ts`); assistant bubble chrome comes from **`AgentChatBubble`** props and reducers, not stream “phase” hints. No link-preview carousel or inline chat images. GitHub Actions can trigger **`deploy:local`** on a host via **`webhook:deploy`** (see README).
 
 **Key constraints:** Do not set `VITE_OPENCLAW_GATEWAY_URL` on gateway production builds unless intentional. `VITE_*` vars are public in the bundle. Dev from another origin may require gateway **`allowedOrigins`** updates. Optional dev logging: **`VITE_OPENCLAW_DEBUG`** and **`VITE_OPENCLAW_SESSIONS_DEBUG`** (see README / `.env.example`).
 
@@ -33,7 +33,7 @@ Update this section as the **final step** of any plan that changes dependencies 
 - **Frontend:** React 18, TypeScript, Vite 5
 - **UI:** MUI v5, Emotion
 - **Content:** react-markdown, remark-gfm, rehype-sanitize
-- **Realtime:** WebSocket to gateway (`src/api/gateway.ts`); in-flight phases, terminal payloads, reconnect, per-thread `sessionKey`, multi-thread list (`src/utils/chatThreadsStorage.ts`) — `docs/agent-run-phase.md`, `docs/multiple-chat-threads.md`, `docs/new-chat-session.md`
+- **Realtime:** WebSocket to gateway (`src/api/gateway.ts`); run chrome (`idle`/`running`/`stale`), terminal payloads, reconnect, per-thread `sessionKey`, multi-thread list (`src/utils/chatThreadsStorage.ts`) — `docs/assistant-run-chrome.md`, `docs/multiple-chat-threads.md`, `docs/new-chat-session.md`
 - **PWA:** vite-plugin-pwa
 - **Testing:** Vitest — `npm run test`; also `npm run build` for `tsc` + Vite
 - **CI / deploy:** GitHub Actions, `npm run deploy:local`, `npm run webhook:deploy`
@@ -69,7 +69,7 @@ Full detail: **`.cursor/rules/function-declaration-and-file-layout.mdc`** and **
 
 ## MUI: Styles section for `sx`
 
-In **`*.tsx`**, put **non-trivial** `sx` objects (several properties, `(theme) => …`, or reused) in a **`// Styles`** block at the **bottom** of the file as **`const …Sx: SxProps<Theme>`** with a component/file prefix. See **`.cursor/rules/mui-sx-styles-section.mdc`** and **`.github/instructions/typescript.instructions.md`**.
+In **`*.tsx`**, put **non-trivial** `sx` objects (several properties, `(theme) => …`, or reused) in a **`// Styles`** block at the **bottom** as **`const …Sx: SxProps<Theme>`** — **file-scoped prefix** if **`export`ed**; **role** names without repeating the component name if **private** (single-primary-component files). See **`.cursor/rules/mui-sx-styles-section.mdc`** and **`.github/instructions/typescript.instructions.md`**.
 
 ---
 
@@ -108,6 +108,8 @@ Branch format: `<prefix>/<short-description>` in kebab-case (`feat/`, `fix/`, `d
 ## Naming Conventions
 
 Self-explanatory names; full words over abbreviations; avoid `data`, `info`, `result`; booleans like `isLoading`, `hasError`; include owning entity when it clarifies meaning.
+
+**Export boundary:** anything **`export`ed** for other files **should** use a **file-scoped prefix**; **not exported** module-private helpers in a single-primary-component **`.tsx`** file should **not** repeat the component/file name — use role names (e.g. `outerSx` not `userBubbleOuterSx`). See **`.cursor/rules/naming-conventions.mdc`**.
 
 ---
 

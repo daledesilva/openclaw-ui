@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { mapRawHistoryMessage, parseContentParts } from './gateway-types';
 
 describe('parseContentParts plain object tool payloads', () => {
-  it('extracts link previews from web search JSON object', () => {
+  it('treats web search JSON object as non-body payload (no visible text)', () => {
     const content = {
       organic_results: [{ link: 'https://a.com', title: 'A' }],
     };
     const parsed = parseContentParts(content);
-    expect(parsed.linkPreviews).toEqual([{ url: 'https://a.com', title: 'A' }]);
     expect(parsed.body).toBe('');
+    expect(parsed.toolCalls).toEqual([]);
   });
 });
 
