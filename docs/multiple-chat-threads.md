@@ -14,10 +14,11 @@ flowchart LR
   end
   GW[Gateway]
   LS <--> UI
-  UI -->|"chat.history / chat.send per sessionKey"| GW
+  UI -->|"chat.history / chat.send / sessions.list / usage.cost"| GW
 ```
 
-- **Thread** — One UI row: label, gateway `sessionKey`, `updatedAt`. Not the same as OpenClaw **workspaces** (Telegram channels, CLI profiles, etc.); those are product concepts configured on the gateway. This app only controls which **`sessionKey`** is sent on the operator WebSocket.
+- **Thread** — One UI row: label plus a stats line (message count, optional tokens / USD); the gateway `sessionKey` is stored for routing but not shown in the list. Not the same as OpenClaw **workspaces** (Telegram channels, CLI profiles, etc.); those are product concepts configured on the gateway. This app only controls which **`sessionKey`** is sent on the operator WebSocket.
+- **Canonical vs short `sessionKey`** — The UI stores short keys for new web chats (e.g. `webchat-<uuid>`) and sends them on `chat.send` / `chat.history` (the gateway accepts them). `sessions.list` returns each row’s canonical **`key`** (e.g. `agent:main:webchat-<uuid>`). The client **aliases** token stats to both forms so lookups match. See [`openClawSessionSuffixFromCanonicalKey`](../src/api/gatewaySessionsList.ts).
 - **Active thread** — Drives `chat.send`, `chat.history`, and which incoming **`chat` events** are applied (see below).
 
 ## Flows
@@ -48,13 +49,16 @@ When **`VITE_OPENCLAW_SESSION_KEY`** is set, the gateway session is fixed. The U
 | Piece | Role |
 | --- | --- |
 | [`src/utils/chatThreadsStorage.ts`](../src/utils/chatThreadsStorage.ts) | Snapshot shape (`version`, `threads`, `activeThreadId`), persist, migrate, helpers. |
-| [`src/api/gateway.ts`](../src/api/gateway.ts) | `sendChatMessage(msg, { sessionKey })`, `fetchChatHistory(limit, sessionKeyOverride)`, `getActiveChatSessionKey` on `initGatewayConnection` for event routing. |
-| [`src/App.tsx`](../src/App.tsx) | Thin top bar (version, connection, chips, stats); drawer (mobile) / permanent sidebar (desktop); thread selection; stale history guard. Top bar and each sidebar row show **message count** and **approximate character total** (transcript text only—not tokens). |
+| [`src/api/gateway.ts`](../src/api/gateway.ts) | `sendChatMessage(msg, { sessionKey })`, `fetchChatHistory(limit, sessionKeyOverride)`, `fetchGatewaySessionsList()` (`sessions.list`), `fetchGatewayUsageCost()` (`usage.cost`), `getActiveChatSessionKey` on `initGatewayConnection` for event routing. |
+| [`src/api/gatewaySessionsList.ts`](../src/api/gatewaySessionsList.ts) | Parse `sessions.list` into token stats; **suffix aliasing** for `agent:<id>:…` keys; default agent id from list or **`health`** payload; optional `sessions.list` cost-probe logging (`VITE_OPENCLAW_DEBUG` or `VITE_OPENCLAW_SESSIONS_DEBUG` in dev). |
+| [`src/api/gatewayUsageCost.ts`](../src/api/gatewayUsageCost.ts) | Defensive parse of `usage.cost` (aggregate + optional per-session map); merges unscoped + `sessionKey`-scoped responses; debug logging alongside sessions probe. |
+| [`src/App.tsx`](../src/App.tsx) | Thin top bar (version, connection, chips, stats); drawer (mobile) / permanent sidebar (desktop); thread selection; stale history guard. Top bar and sidebar show **message count**, **token totals** (`sessions.list`), and **estimated USD** when `usage.cost` returns parseable fields (per-session if present, else an all-sessions aggregate). Cached token totals in `localStorage` for inactive threads. |
 
 ## Technical gotchas
 
 - **Gateways that omit `sessionKey` on `chat` events** — The client cannot filter by session; avoid relying on multiple simultaneous in-flight runs across threads on such gateways.
-- **No server-side thread list** — Threads exist only in this browser’s `localStorage` unless the gateway later exposes session enumeration.
+- **Thread labels are local** — Row titles and ordering live in this browser’s `localStorage`. Token totals are refreshed from the gateway via **`sessions.list`**. Cost lines use **`usage.cost`**; response shapes vary by gateway version—if nothing parses, the UI stays tokens-only. See [API usage & costs](https://docs.openclaw.ai/reference/api-usage-costs) and [Token use & costs](https://docs.openclaw.ai/reference/token-use).
+- **Gateways that omit `sessions.list` or return an unexpected shape** omit token counts in the header/sidebar until the RPC succeeds or the session appears in the list.
 - **Operator naming** — Prefer **conversation** / **`sessionKey`** in UI copy; reserve **workspace** for gateway docs and multi-channel setup ([configuration reference](https://docs.openclaw.ai/gateway/configuration-reference)).
 
 ## Related documentation

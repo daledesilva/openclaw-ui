@@ -8,6 +8,10 @@ declare module 'virtual:app-version' {
 interface ImportMetaEnv {
   /** Full WebSocket URL to the OpenClaw gateway, e.g. ws://192.168.1.50:18789. Omit on the server machine so the UI uses the same host as the page. */
   readonly VITE_OPENCLAW_GATEWAY_URL?: string;
+  /** When `"1"`, verbose gateway WebSocket frame logging. */
+  readonly VITE_OPENCLAW_DEBUG?: string;
+  /** When `"1"` in dev, log `sessions.list` responses and cost-related keys for debugging. */
+  readonly VITE_OPENCLAW_SESSIONS_DEBUG?: string;
 }
 
 interface ImportMeta {

@@ -500,6 +500,16 @@ export function fetchChatHistory(limit = 100, sessionKeyOverride?: string): Prom
   });
 }
 
+/** WebSocket RPC: list sessions (token totals live in gateway session store per session key). */
+export function fetchGatewaySessionsList(): Promise<unknown> {
+  return sendReq<unknown>('sessions.list', {});
+}
+
+/** WebSocket RPC: usage / cost snapshot (shape varies; see `parseGatewayUsageCostPayload`). */
+export function fetchGatewayUsageCost(params?: Record<string, unknown>): Promise<unknown> {
+  return sendReq<unknown>('usage.cost', params ?? {});
+}
+
 /** Close the socket and reject in-flight requests (e.g. React StrictMode cleanup). */
 export function disconnectGateway(): void {
   for (const [, pending] of pendingReqs) {

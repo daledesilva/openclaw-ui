@@ -143,7 +143,7 @@ On the host: **`scripts\deploy-local.cmd`** or **`npm run deploy:local`** (disca
 
 **First-time device approval:** After the token passes, a new device may need one-time approval. If you see "Device pending approval", run `openclaw devices list` then `openclaw devices approve <requestId>` (or `--latest`) on the gateway host. For a remote gateway, add `--url ws://<gateway-IP>:18789` and `--token <gateway-token>`. Device identity is stored in `localStorage`; clearing it creates a new device and requires another approval. Requires a modern browser (Chrome 137+, Firefox 129+, Safari 17+).
 
-Leave `.env.local` **off** the gateway PC when running `npm run build` so production builds use the page hostname. Set `VITE_OPENCLAW_DEBUG=1` for verbose gateway frame logging in the console.
+Leave `.env.local` **off** the gateway PC when running `npm run build` so production builds use the page hostname. Set `VITE_OPENCLAW_DEBUG=1` for verbose gateway frame logging in the console. In dev, `VITE_OPENCLAW_SESSIONS_DEBUG=1` additionally logs `sessions.list` and `usage.cost` JSON (for token/cost UI work).
 
 ---
 

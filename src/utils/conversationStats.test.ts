@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../chatThreadTypes';
-import { computeThreadConversationStats } from './conversationStats';
+import { computeThreadConversationStats, computeThreadMessageCount } from './conversationStats';
 
 describe('computeThreadConversationStats', () => {
   it('counts messages and sums content length', () => {
@@ -38,5 +38,17 @@ describe('computeThreadConversationStats', () => {
     expect(
       computeThreadConversationStats(messages, { omitTrailingEmptyAssistantPlaceholder: true })
     ).toEqual({ messageCount: 1, textCharacterCount: 2 });
+  });
+});
+
+describe('computeThreadMessageCount', () => {
+  it('matches messageCount from computeThreadConversationStats', () => {
+    const messages: Message[] = [
+      { id: '1', role: 'user', content: 'hello' },
+      { id: '2', role: 'ai', kind: 'assistant', content: 'world' },
+    ];
+    expect(computeThreadMessageCount(messages)).toBe(
+      computeThreadConversationStats(messages).messageCount
+    );
   });
 });

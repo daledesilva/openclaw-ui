@@ -51,3 +51,11 @@ export function computeThreadConversationStats(
   }
   return { messageCount: rows.length, textCharacterCount };
 }
+
+/** Message row count only (same trailing empty-assistant rule as {@link computeThreadConversationStats}). */
+export function computeThreadMessageCount(
+  messages: Message[],
+  options?: { omitTrailingEmptyAssistantPlaceholder?: boolean }
+): number {
+  return computeThreadConversationStats(messages, options).messageCount;
+}

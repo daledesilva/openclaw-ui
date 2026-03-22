@@ -5,7 +5,8 @@ import {
   normalizeChatThreadsSnapshot,
   setActiveThreadInSnapshot,
   touchThreadInSnapshot,
-  updateThreadCachedStatsInSnapshot,
+  updateThreadCachedGatewayTokensInSnapshot,
+  updateThreadCachedMessageCountInSnapshot,
   type ChatThreadRecord,
   type ChatThreadsSnapshot,
 } from './chatThreadsStorage';
@@ -66,19 +67,37 @@ describe('addThreadToSnapshot', () => {
   });
 });
 
-describe('updateThreadCachedStatsInSnapshot', () => {
+describe('updateThreadCachedMessageCountInSnapshot', () => {
   it('updates only the matching thread', () => {
     const base: ChatThreadsSnapshot = {
       version: 1,
       threads: [thread({ threadId: 'a' }), thread({ threadId: 'b' })],
       activeThreadId: 'a',
     };
-    const next = updateThreadCachedStatsInSnapshot(base, 'b', 9, 900);
+    const next = updateThreadCachedMessageCountInSnapshot(base, 'b', 9);
     expect(next.threads.find((t) => t.threadId === 'a')).not.toHaveProperty('cachedMessageCount');
     expect(next.threads.find((t) => t.threadId === 'b')).toMatchObject({
       cachedMessageCount: 9,
-      cachedApproxTextCharacters: 900,
     });
+  });
+});
+
+describe('updateThreadCachedGatewayTokensInSnapshot', () => {
+  it('sets cachedGatewayTotalTokens from session key map', () => {
+    const base: ChatThreadsSnapshot = {
+      version: 1,
+      threads: [
+        thread({ threadId: 'a', sessionKey: 'sk1' }),
+        thread({ threadId: 'b', sessionKey: 'sk2' }),
+      ],
+      activeThreadId: 'a',
+    };
+    const next = updateThreadCachedGatewayTokensInSnapshot(base, {
+      sk1: { totalTokens: 100 },
+      sk2: { inputTokens: 5, outputTokens: 5 },
+    });
+    expect(next.threads.find((t) => t.threadId === 'a')?.cachedGatewayTotalTokens).toBe(100);
+    expect(next.threads.find((t) => t.threadId === 'b')?.cachedGatewayTotalTokens).toBe(10);
   });
 });
 

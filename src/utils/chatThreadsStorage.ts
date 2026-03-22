@@ -1,3 +1,6 @@
+import type { GatewaySessionTokenStats } from '../api/gatewaySessionsList';
+import { displayTotalTokens } from '../api/gatewaySessionsList';
+
 /** Persisted chat threads (gateway `sessionKey` per conversation). */
 export const CHAT_THREADS_STORAGE_KEY = 'openclaw-ui-chat-threads-v1';
 
@@ -10,7 +13,9 @@ export type ChatThreadRecord = {
   updatedAt: number;
   /** Filled when the thread was last active; used in the sidebar for non-active threads. */
   cachedMessageCount?: number;
-  /** Sum of message / reasoning / trace text lengths when last persisted (not model tokens). */
+  /** Last known total from gateway `sessions.list` (for sidebar when thread is inactive). */
+  cachedGatewayTotalTokens?: number;
+  /** @deprecated No longer written; kept for older localStorage payloads. */
   cachedApproxTextCharacters?: number;
 };
 
@@ -170,18 +175,31 @@ export function nextThreadLabel(snapshot: ChatThreadsSnapshot): string {
   return `Chat ${n}`;
 }
 
-export function updateThreadCachedStatsInSnapshot(
+export function updateThreadCachedMessageCountInSnapshot(
   snapshot: ChatThreadsSnapshot,
   threadId: string,
-  cachedMessageCount: number,
-  cachedApproxTextCharacters: number
+  cachedMessageCount: number
 ): ChatThreadsSnapshot {
   return {
     ...snapshot,
     threads: snapshot.threads.map((t) =>
-      t.threadId === threadId
-        ? { ...t, cachedMessageCount, cachedApproxTextCharacters }
-        : t
+      t.threadId === threadId ? { ...t, cachedMessageCount } : t
     ),
+  };
+}
+
+/** Merge gateway token totals into threads whose `sessionKey` appears in the map. */
+export function updateThreadCachedGatewayTokensInSnapshot(
+  snapshot: ChatThreadsSnapshot,
+  tokensBySessionKey: Record<string, GatewaySessionTokenStats>
+): ChatThreadsSnapshot {
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((t) => {
+      const stats = tokensBySessionKey[t.sessionKey];
+      const total = displayTotalTokens(stats);
+      if (total === undefined) return t;
+      return { ...t, cachedGatewayTotalTokens: total };
+    }),
   };
 }

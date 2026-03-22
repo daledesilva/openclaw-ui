@@ -33,12 +33,32 @@ import {
   initGatewayConnection,
   sendChatMessage,
   fetchChatHistory,
+  fetchGatewaySessionsList,
+  fetchGatewayUsageCost,
   hasGatewayToken,
   isGatewaySessionKeyPinnedByBuild,
   clearStoredGatewayToken,
   disconnectGateway,
   requestGatewayReconnect,
 } from './api/gateway';
+import {
+  displayTotalTokens,
+  extractDefaultAgentIdFromHealthPayload,
+  extractDefaultAgentIdFromSessionsListPayload,
+  extractSessionTokenStatsByKey,
+  formatTokenBreakdown,
+  logGatewaySessionsListCostProbe,
+  type GatewaySessionTokenStats,
+} from './api/gatewaySessionsList';
+import {
+  canonicalOpenClawSessionKey,
+  formatUsdEstimate,
+  logGatewayUsageCostProbe,
+  mergeParsedGatewayUsageCost,
+  parseGatewayUsageCostPayload,
+  type ParsedGatewayUsageCost,
+  sessionOnlyUsageCostUsd,
+} from './api/gatewayUsageCost';
 import {
   addThreadToSnapshot,
   collapseThreadsSnapshotForPinnedSessionKey,
@@ -48,10 +68,11 @@ import {
   persistChatThreadsSnapshot,
   setActiveThreadInSnapshot,
   touchThreadInSnapshot,
-  updateThreadCachedStatsInSnapshot,
+  updateThreadCachedGatewayTokensInSnapshot,
+  updateThreadCachedMessageCountInSnapshot,
   type ChatThreadsSnapshot,
 } from './utils/chatThreadsStorage';
-import { computeThreadConversationStats } from './utils/conversationStats';
+import { computeThreadMessageCount } from './utils/conversationStats';
 import type { FetchedChatMessage } from './api/gateway';
 import { useLiveAppVersion } from './useLiveAppVersion';
 import { sanitizeDisplayText } from './utils/sanitizeDisplayText';
@@ -94,6 +115,14 @@ export default function App() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [newConversationBusy, setNewConversationBusy] = useState(false);
   const [threadsSnapshot, setThreadsSnapshot] = useState<ChatThreadsSnapshot>(() => loadChatThreadsFromStorage());
+  /** Latest gateway `sessions.list` token stats by `sessionKey`. */
+  const [gatewaySessionTokensByKey, setGatewaySessionTokensByKey] = useState<
+    Record<string, GatewaySessionTokenStats>
+  >({});
+  /** Default agent id from `sessions.list` / `health` (for canonical keys + usage.cost). */
+  const [gatewayDefaultAgentId, setGatewayDefaultAgentId] = useState<string>('main');
+  const gatewayDefaultAgentIdRef = useRef<string>('main');
+  const [gatewayUsageCost, setGatewayUsageCost] = useState<ParsedGatewayUsageCost | null>(null);
   const [threadDrawerOpen, setThreadDrawerOpen] = useState(false);
   /** Ignore late `chat.history` results after the user switched threads. */
   const historyFetchGenerationRef = useRef(0);
@@ -117,13 +146,115 @@ export default function App() {
     [threadsSnapshot.threads]
   );
 
-  const activeConversationStats = useMemo(
+  /** `null` when the gateway has not reported totals for this thread yet (e.g. brand-new chat). */
+  const activeThreadTokenSegment = useMemo((): string | null => {
+    if (!activeThread) return null;
+    const n =
+      displayTotalTokens(gatewaySessionTokensByKey[activeThread.sessionKey]) ??
+      activeThread.cachedGatewayTotalTokens;
+    return n !== undefined ? `${n.toLocaleString()} tokens` : null;
+  }, [activeThread, gatewaySessionTokensByKey]);
+
+  const headerCostLabel = useMemo((): string | null => {
+    if (!activeThread || !gatewayUsageCost) return null;
+    const per = sessionOnlyUsageCostUsd(activeThread.sessionKey, gatewayUsageCost, gatewayDefaultAgentId);
+    if (per !== undefined) return formatUsdEstimate(per);
+    const map = gatewayUsageCost.bySessionKey;
+    const hasMap = map && Object.keys(map).length > 0;
+    if (!hasMap && gatewayUsageCost.aggregateUsd !== undefined) {
+      return `${formatUsdEstimate(gatewayUsageCost.aggregateUsd)} (all sessions)`;
+    }
+    return null;
+  }, [activeThread, gatewayUsageCost, gatewayDefaultAgentId]);
+
+  const statsTooltipText = useMemo(() => {
+    const lines: string[] = [];
+    const breakdown = formatTokenBreakdown(
+      activeThread ? gatewaySessionTokensByKey[activeThread.sessionKey] : undefined
+    );
+    lines.push(
+      breakdown
+        ? `Tokens: ${breakdown} (from gateway sessions.list).`
+        : 'Token totals come from the gateway session store via WebSocket sessions.list.'
+    );
+    lines.push(
+      'Short thread keys (e.g. webchat-…) match canonical gateway keys (agent:<agentId>:…). Dollar cost uses usage.cost when the gateway returns parseable fields; set VITE_OPENCLAW_SESSIONS_DEBUG=1 to log raw payloads.'
+    );
+    return lines.join(' ');
+  }, [activeThread, gatewaySessionTokensByKey]);
+
+  const activeMessageCount = useMemo(
     () =>
-      computeThreadConversationStats(messages, {
+      computeThreadMessageCount(messages, {
         omitTrailingEmptyAssistantPlaceholder: isAgentRunBlockingInput(agentActivity),
       }),
     [messages, agentActivity]
   );
+
+  const refreshGatewaySessionTokens = useCallback(async () => {
+    try {
+      const raw = await fetchGatewaySessionsList();
+      logGatewaySessionsListCostProbe(raw, { activeSessionKey: routingSessionKeyRef.current || undefined });
+      const agentFromList = extractDefaultAgentIdFromSessionsListPayload(raw);
+      if (agentFromList) {
+        gatewayDefaultAgentIdRef.current = agentFromList;
+        setGatewayDefaultAgentId(agentFromList);
+      }
+      const map = extractSessionTokenStatsByKey(raw);
+      setGatewaySessionTokensByKey(map);
+      setThreadsSnapshot((previousSnapshot) => {
+        const merged = updateThreadCachedGatewayTokensInSnapshot(previousSnapshot, map);
+        const out = sessionKeyPinnedByBuild ? collapseThreadsSnapshotForPinnedSessionKey(merged) : merged;
+        persistChatThreadsSnapshot(out);
+        return out;
+      });
+
+      let mergedCost: ParsedGatewayUsageCost = {};
+      const agentId = agentFromList ?? gatewayDefaultAgentIdRef.current ?? 'main';
+      gatewayDefaultAgentIdRef.current = agentId;
+
+      try {
+        const unscoped = await fetchGatewayUsageCost({});
+        logGatewayUsageCostProbe(unscoped, {});
+        mergedCost = mergeParsedGatewayUsageCost(mergedCost, parseGatewayUsageCostPayload(unscoped));
+      } catch (costErr) {
+        console.warn('[OpenClaw gateway] usage.cost (unscoped) failed:', costErr);
+      }
+
+      const uiKey = routingSessionKeyRef.current?.trim();
+      if (uiKey) {
+        try {
+          const canonical = canonicalOpenClawSessionKey(uiKey, agentId);
+          const scoped = await fetchGatewayUsageCost({ sessionKey: canonical });
+          logGatewayUsageCostProbe(scoped, { sessionKey: canonical });
+          mergedCost = mergeParsedGatewayUsageCost(mergedCost, parseGatewayUsageCostPayload(scoped));
+        } catch (scopedErr) {
+          console.warn('[OpenClaw gateway] usage.cost (sessionKey) failed:', scopedErr);
+        }
+      }
+
+      const hasCostData =
+        mergedCost.aggregateUsd !== undefined ||
+        (mergedCost.bySessionKey !== undefined && Object.keys(mergedCost.bySessionKey).length > 0);
+      setGatewayUsageCost(hasCostData ? mergedCost : null);
+    } catch (err) {
+      console.warn('[OpenClaw gateway] sessions.list failed:', err);
+    }
+  }, [sessionKeyPinnedByBuild]);
+
+  const refreshGatewaySessionTokensRef = useRef(refreshGatewaySessionTokens);
+  useLayoutEffect(() => {
+    refreshGatewaySessionTokensRef.current = refreshGatewaySessionTokens;
+  }, [refreshGatewaySessionTokens]);
+
+  const sessionsListDebounceRef = useRef<number | null>(null);
+  const scheduleRefreshGatewaySessionTokens = useCallback((delayMs: number) => {
+    if (sessionsListDebounceRef.current !== null) window.clearTimeout(sessionsListDebounceRef.current);
+    sessionsListDebounceRef.current = window.setTimeout(() => {
+      sessionsListDebounceRef.current = null;
+      void refreshGatewaySessionTokensRef.current();
+    }, delayMs);
+  }, []);
 
   const commitThreadsSnapshot = useCallback(
     (next: ChatThreadsSnapshot) => {
@@ -138,32 +269,33 @@ export default function App() {
     routingSessionKeyRef.current = activeThread?.sessionKey ?? '';
   }, [activeThread?.sessionKey]);
 
+  useLayoutEffect(() => {
+    gatewayDefaultAgentIdRef.current = gatewayDefaultAgentId;
+  }, [gatewayDefaultAgentId]);
+
   useEffect(() => {
     const threadId = activeThread?.threadId;
     if (!threadId) return;
-    const stats = activeConversationStats;
+    const messageCount = activeMessageCount;
     const timeoutId = window.setTimeout(() => {
       setThreadsSnapshot((previousSnapshot) => {
         const currentRow = previousSnapshot.threads.find((t) => t.threadId === threadId);
-        if (
-          currentRow?.cachedMessageCount === stats.messageCount &&
-          currentRow?.cachedApproxTextCharacters === stats.textCharacterCount
-        ) {
+        if (currentRow?.cachedMessageCount === messageCount) {
           return previousSnapshot;
         }
-        const merged = updateThreadCachedStatsInSnapshot(
-          previousSnapshot,
-          threadId,
-          stats.messageCount,
-          stats.textCharacterCount
-        );
+        const merged = updateThreadCachedMessageCountInSnapshot(previousSnapshot, threadId, messageCount);
         const out = sessionKeyPinnedByBuild ? collapseThreadsSnapshotForPinnedSessionKey(merged) : merged;
         persistChatThreadsSnapshot(out);
         return out;
       });
     }, 400);
     return () => window.clearTimeout(timeoutId);
-  }, [activeConversationStats, activeThread?.threadId, sessionKeyPinnedByBuild]);
+  }, [activeMessageCount, activeThread?.threadId, sessionKeyPinnedByBuild]);
+
+  useEffect(() => {
+    if (connectionStatus !== 'ready' || !activeThread?.threadId) return;
+    scheduleRefreshGatewaySessionTokens(150);
+  }, [activeThread?.threadId, connectionStatus, scheduleRefreshGatewaySessionTokens]);
 
   useEffect(() => {
     agentActivityRef.current = agentActivity;
@@ -206,6 +338,14 @@ export default function App() {
       onMessage: (message) => {
         if (import.meta.env.DEV) {
           console.log('[OpenClaw gateway] generic message:', message);
+        }
+        const envelope = message as { type?: string; event?: string; payload?: unknown };
+        if (envelope.type === 'event' && envelope.event === 'health' && envelope.payload !== undefined) {
+          const fromHealth = extractDefaultAgentIdFromHealthPayload(envelope.payload);
+          if (fromHealth) {
+            gatewayDefaultAgentIdRef.current = fromHealth;
+            setGatewayDefaultAgentId(fromHealth);
+          }
         }
       },
       onReasoning: (chunk) => {
@@ -275,6 +415,7 @@ export default function App() {
         setLiveLastToolSummary(null);
         recentThoughtsRef.current = [];
         touchStreamActivity();
+        scheduleRefreshGatewaySessionTokens(300);
         if (info.state === 'error') {
           setRunTerminalNotice({
             kind: 'error',
@@ -289,6 +430,7 @@ export default function App() {
       onConnected: () => {
         setConnectionStatus('ready');
         setConnectionError(null);
+        void refreshGatewaySessionTokensRef.current();
         const sessionKeyWhenHistoryRequested = routingSessionKeyRef.current;
         fetchChatHistory(100, sessionKeyWhenHistoryRequested || undefined)
           .then((history) => {
@@ -311,8 +453,11 @@ export default function App() {
         recentThoughtsRef.current = [];
       },
     });
-    return () => disconnectGateway();
-  }, [tokenReady, syncStateFromFetchedHistory]);
+    return () => {
+      if (sessionsListDebounceRef.current !== null) window.clearTimeout(sessionsListDebounceRef.current);
+      disconnectGateway();
+    };
+  }, [tokenReady, syncStateFromFetchedHistory, scheduleRefreshGatewaySessionTokens]);
 
   if (!tokenReady) {
     return <TokenSetupScreen onTokenSet={() => setTokenReady(true)} />;
@@ -469,13 +614,18 @@ export default function App() {
         {sortedThreads.map((thread) => {
           const isRowActive = thread.threadId === threadsSnapshot.activeThreadId;
           const messageCountForRow = isRowActive
-            ? activeConversationStats.messageCount
+            ? activeMessageCount
             : (thread.cachedMessageCount ?? 0);
-          const characterCountForRow = isRowActive
-            ? activeConversationStats.textCharacterCount
-            : (thread.cachedApproxTextCharacters ?? 0);
-          const sessionKeyLine =
-            thread.sessionKey.length > 36 ? `${thread.sessionKey.slice(0, 18)}…` : thread.sessionKey;
+          const tokenTotalForRow =
+            displayTotalTokens(gatewaySessionTokensByKey[thread.sessionKey]) ??
+            thread.cachedGatewayTotalTokens;
+          const rowCostUsd =
+            gatewayUsageCost !== null
+              ? sessionOnlyUsageCostUsd(thread.sessionKey, gatewayUsageCost, gatewayDefaultAgentId)
+              : undefined;
+          const costSuffix = rowCostUsd !== undefined ? ` · ${formatUsdEstimate(rowCostUsd)}` : '';
+          const tokenPart =
+            tokenTotalForRow !== undefined ? ` · ${tokenTotalForRow.toLocaleString()} tokens` : '';
           return (
             <ListItemButton
               key={thread.threadId}
@@ -484,14 +634,15 @@ export default function App() {
             >
               <ListItemText
                 primary={thread.label}
-                secondary={`${messageCountForRow} msgs · ~${characterCountForRow.toLocaleString()} chars\n${sessionKeyLine}`}
+                secondary={`${messageCountForRow} msgs${tokenPart}${costSuffix}`}
                 primaryTypographyProps={{ noWrap: true }}
                 secondaryTypographyProps={{
                   sx: {
                     fontSize: '0.62rem',
                     opacity: 0.88,
-                    whiteSpace: 'pre-line',
-                    wordBreak: 'break-all',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
                     lineHeight: 1.35,
                   },
                 }}
@@ -659,10 +810,7 @@ export default function App() {
             </Box>
             {connectionStatus === 'ready' && activeThread && (
               <Box sx={{ justifySelf: 'end', minWidth: 0, alignSelf: 'start' }}>
-                <Tooltip
-                  title="Rows in this transcript and total characters (user + assistant text, reasoning, and trace lines). Rough guide only—not model tokens or exact context window usage."
-                  placement="bottom-end"
-                >
+                <Tooltip title={statsTooltipText} placement="bottom-end">
                   <Typography
                     variant="caption"
                     component="span"
@@ -682,8 +830,9 @@ export default function App() {
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    {activeConversationStats.messageCount} messages · ~
-                    {activeConversationStats.textCharacterCount.toLocaleString()} chars
+                    {activeMessageCount} messages
+                    {activeThreadTokenSegment ? ` · ${activeThreadTokenSegment}` : ''}
+                    {headerCostLabel ? ` · ${headerCostLabel}` : ''}
                   </Typography>
                 </Tooltip>
               </Box>
