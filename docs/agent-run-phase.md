@@ -59,7 +59,7 @@ sequenceDiagram
 | `onChatTerminal` | Passes `{ state, errorMessage?, runId? }` after handling the terminal `chat` event. |
 | `requestGatewayReconnect` | Closes the socket and calls internal `connect()` again; callbacks from the last `initGatewayConnection` remain. |
 | `src/utils/agentRunActivity.ts` | Pure helpers to map hints + chunks to `AgentRunActivity`, and `phaseBubbleDisplayText` for the phase bubble body. |
-| `App.tsx` | Header chips, **phase bubble** (spinner + optional reasoning line or last-tool label), hides phase bubble while `responding`, skips empty in-thread assistant placeholder. There are **no** separate tool call/result bubbles in the main thread; tools and streamed thinking are shown in the **chain-of-thought modal** (opened from the phase bubble, **`reasoningTrace`** row, or header). **`onAssistantFinal`** runs `applyAssistantFinalWithThoughtBuffer` (`src/utils/recentThoughtsReducer.ts`): optional **`reasoningTrace`** row above the assistant, then merge into one assistant bubble. |
+| `App.tsx` | Thin header: version, connection line, status chips, transcript stats. **Phase bubble** (spinner + optional reasoning line or last-tool label), hides phase bubble while `responding`, skips empty in-thread assistant placeholder. There are **no** separate tool call/result bubbles in the main thread; tools and streamed thinking are shown in the **chain-of-thought modal** (opened from the phase bubble, **`reasoningTrace`** row, or assistant **View reasoning**). **`onAssistantFinal`** runs `applyAssistantFinalWithThoughtBuffer` (`src/utils/recentThoughtsReducer.ts`): optional **`reasoningTrace`** row above the assistant, then merge into one assistant bubble. |
 | `recentThoughtsReducer.ts` | Buffers `ThoughtItem`s for live callbacks; **`foldFetchedHistoryToMessages`** rebuilds from `chat.history`: one trace per **user-visible** assistant row (`assistantHistoryRowDisplaysToUser`), with gateway thinking (normalized as `reasoning`) folded as **`reasoningChunk`**s in the buffer; orphan buffer flushed at end of history if needed. |
 
 ## Technical gotchas
@@ -74,4 +74,5 @@ sequenceDiagram
 ## Related documentation
 
 - [Chain of thought](chain-of-thought.md) — `recentThoughts` buffer, `reasoningTrace` bubble on `onAssistantFinal`, and history fold.
-- [New chat session](new-chat-session.md) — rotating `sessionKey`; New chat is disabled while a run is active.
+- [Multiple chat threads](multiple-chat-threads.md) — thread list, history fetch, live `chat` event routing.
+- [New chat session](new-chat-session.md) — new conversation control is in the Conversations sidebar header; disabled while a run blocks input.

@@ -185,8 +185,8 @@ Bump **`MAJOR.MINOR.PATCH`** only by editing **`package.json`** / **`npm version
 
 See the [docs folder](docs/) for stack choices, component patterns, and design notes.
 
-**Chain of thought:** Reasoning and tools open in a **dismissible dialog** (not a side drawer) as a scrollable column of small gray bubbles. In the main thread, use **View Thought Process** on the trace row or the header brain icon on later turns. Details: [docs/chain-of-thought.md](docs/chain-of-thought.md).
+**Chain of thought:** Reasoning and tools open in a **dismissible dialog** (not a side drawer) as a scrollable column of small gray bubbles. In the main thread, use **View Thought Process** on the trace row, tap the in-run **phase bubble**, or **View reasoning** on an assistant bubble when available. Details: [docs/chain-of-thought.md](docs/chain-of-thought.md).
 
-**Agent run phase:** Header chips and the phase bubble (spinner + reasoning or **last tool label**) cover the in-flight run; the phase bubble hides while the answer streams in the main assistant bubble, and the current turn does not add separate tool-call bubbles. Details: [docs/agent-run-phase.md](docs/agent-run-phase.md).
+**Agent run phase:** The thin top bar shows version, connection state, status chips, and transcript stats. The **phase bubble** (spinner + reasoning or **last tool label**) covers the in-flight run; it hides while the answer streams in the main assistant bubble, and the current turn does not add separate tool-call bubbles. Details: [docs/agent-run-phase.md](docs/agent-run-phase.md).
 
-**New chat:** Header control starts a **new gateway session** (new `sessionKey` in browser storage) and reloads history for that key. Details: [docs/new-chat-session.md](docs/new-chat-session.md).
+**Conversations:** A **sidebar thread list** maps each row to its own gateway `sessionKey` and history. **New conversation** (speech-bubble-plus icon in the Conversations panel header) adds a thread with a fresh key; you can switch threads without losing the list (stored in `localStorage`). Details: [docs/multiple-chat-threads.md](docs/multiple-chat-threads.md) and [docs/new-chat-session.md](docs/new-chat-session.md).

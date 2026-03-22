@@ -32,7 +32,7 @@ Update this section as the **final step** of any plan that changes dependencies 
 - **Frontend:** React 18, TypeScript, Vite 5
 - **UI:** MUI v5, Emotion
 - **Content:** react-markdown, remark-gfm, rehype-sanitize
-- **Realtime:** WebSocket to gateway (`src/api/gateway.ts`); in-flight phases, terminal payloads, reconnect, and `startNewWebchatSession` — `docs/agent-run-phase.md`, `docs/new-chat-session.md`
+- **Realtime:** WebSocket to gateway (`src/api/gateway.ts`); in-flight phases, terminal payloads, reconnect, per-thread `sessionKey`, multi-thread list (`src/utils/chatThreadsStorage.ts`) — `docs/agent-run-phase.md`, `docs/multiple-chat-threads.md`, `docs/new-chat-session.md`
 - **PWA:** vite-plugin-pwa
 - **Testing:** Vitest — `npm run test`; also `npm run build` for `tsc` + Vite
 - **CI / deploy:** GitHub Actions, `npm run deploy:local`, `npm run webhook:deploy`

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from 'react';
 import {
   Box,
   Paper,
@@ -10,14 +10,14 @@ import {
   IconButton,
   Tooltip,
   Chip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
+  Drawer,
+  List,
+  ListItemButton,
+  ListItemText,
+  Toolbar,
 } from '@mui/material';
-import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
-import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import AddCommentIcon from '@mui/icons-material/AddComment';
+import MenuIcon from '@mui/icons-material/Menu';
 import { ChatBubble } from './components/ChatBubble';
 import { ReasoningTraceBubble } from './components/ReasoningTraceBubble';
 import { MessageInput } from './components/MessageInput';
@@ -27,7 +27,6 @@ import type { Message, ThoughtItem } from './chatThreadTypes';
 import {
   appendThoughtItem,
   applyAssistantFinalWithThoughtBuffer,
-  findLastHistoricalChainOfThought,
   foldFetchedHistoryToMessages,
 } from './utils/recentThoughtsReducer';
 import {
@@ -36,11 +35,23 @@ import {
   fetchChatHistory,
   hasGatewayToken,
   isGatewaySessionKeyPinnedByBuild,
-  startNewWebchatSession,
   clearStoredGatewayToken,
   disconnectGateway,
   requestGatewayReconnect,
 } from './api/gateway';
+import {
+  addThreadToSnapshot,
+  collapseThreadsSnapshotForPinnedSessionKey,
+  generateWebchatSessionKey,
+  loadChatThreadsFromStorage,
+  nextThreadLabel,
+  persistChatThreadsSnapshot,
+  setActiveThreadInSnapshot,
+  touchThreadInSnapshot,
+  updateThreadCachedStatsInSnapshot,
+  type ChatThreadsSnapshot,
+} from './utils/chatThreadsStorage';
+import { computeThreadConversationStats } from './utils/conversationStats';
 import type { FetchedChatMessage } from './api/gateway';
 import { useLiveAppVersion } from './useLiveAppVersion';
 import { sanitizeDisplayText } from './utils/sanitizeDisplayText';
@@ -62,6 +73,8 @@ type ConnectionStatus = 'disconnected' | 'connecting' | 'ready' | 'error';
 /** Default watchdog when no stream activity (ms). */
 const AGENT_RUN_STALE_AFTER_MS = 90_000;
 
+const THREAD_DRAWER_WIDTH = 268;
+
 type RunTerminalNotice = { kind: 'error'; message: string } | { kind: 'aborted' };
 
 export default function App() {
@@ -79,8 +92,13 @@ export default function App() {
   const [cotModalPayload, setCotModalPayload] = useState<ChainOfThoughtModalContent | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
-  const [newChatBusy, setNewChatBusy] = useState(false);
+  const [newConversationBusy, setNewConversationBusy] = useState(false);
+  const [threadsSnapshot, setThreadsSnapshot] = useState<ChatThreadsSnapshot>(() => loadChatThreadsFromStorage());
+  const [threadDrawerOpen, setThreadDrawerOpen] = useState(false);
+  /** Ignore late `chat.history` results after the user switched threads. */
+  const historyFetchGenerationRef = useRef(0);
+  /** Active gateway `sessionKey` for routing incoming `chat` events (updated synchronously on switch). */
+  const routingSessionKeyRef = useRef<string>('');
   /** Non-answer signals for the current turn; flushed on `onAssistantFinal`. */
   const recentThoughtsRef = useRef<ThoughtItem[]>([]);
   const traceSeqRef = useRef(0);
@@ -88,10 +106,64 @@ export default function App() {
   const isMobile = useMediaQuery((theme: Theme) => theme.breakpoints.down('sm'));
   const lastReasoningLine =
     sanitizeDisplayText(activeReasoning).trim().split('\n').pop() || '';
-  const lastHistoricalChainOfThought = useMemo(
-    () => findLastHistoricalChainOfThought(messages),
-    [messages]
+
+  const activeThread = useMemo(
+    () => threadsSnapshot.threads.find((t) => t.threadId === threadsSnapshot.activeThreadId),
+    [threadsSnapshot]
   );
+
+  const sortedThreads = useMemo(
+    () => [...threadsSnapshot.threads].sort((a, b) => b.updatedAt - a.updatedAt),
+    [threadsSnapshot.threads]
+  );
+
+  const activeConversationStats = useMemo(
+    () =>
+      computeThreadConversationStats(messages, {
+        omitTrailingEmptyAssistantPlaceholder: isAgentRunBlockingInput(agentActivity),
+      }),
+    [messages, agentActivity]
+  );
+
+  const commitThreadsSnapshot = useCallback(
+    (next: ChatThreadsSnapshot) => {
+      const out = sessionKeyPinnedByBuild ? collapseThreadsSnapshotForPinnedSessionKey(next) : next;
+      persistChatThreadsSnapshot(out);
+      setThreadsSnapshot(out);
+    },
+    [sessionKeyPinnedByBuild]
+  );
+
+  useLayoutEffect(() => {
+    routingSessionKeyRef.current = activeThread?.sessionKey ?? '';
+  }, [activeThread?.sessionKey]);
+
+  useEffect(() => {
+    const threadId = activeThread?.threadId;
+    if (!threadId) return;
+    const stats = activeConversationStats;
+    const timeoutId = window.setTimeout(() => {
+      setThreadsSnapshot((previousSnapshot) => {
+        const currentRow = previousSnapshot.threads.find((t) => t.threadId === threadId);
+        if (
+          currentRow?.cachedMessageCount === stats.messageCount &&
+          currentRow?.cachedApproxTextCharacters === stats.textCharacterCount
+        ) {
+          return previousSnapshot;
+        }
+        const merged = updateThreadCachedStatsInSnapshot(
+          previousSnapshot,
+          threadId,
+          stats.messageCount,
+          stats.textCharacterCount
+        );
+        const out = sessionKeyPinnedByBuild ? collapseThreadsSnapshotForPinnedSessionKey(merged) : merged;
+        persistChatThreadsSnapshot(out);
+        return out;
+      });
+    }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeConversationStats, activeThread?.threadId, sessionKeyPinnedByBuild]);
 
   useEffect(() => {
     agentActivityRef.current = agentActivity;
@@ -130,6 +202,7 @@ export default function App() {
   useEffect(() => {
     if (!tokenReady) return;
     initGatewayConnection({
+      getActiveChatSessionKey: () => routingSessionKeyRef.current || undefined,
       onMessage: (message) => {
         if (import.meta.env.DEV) {
           console.log('[OpenClaw gateway] generic message:', message);
@@ -216,8 +289,10 @@ export default function App() {
       onConnected: () => {
         setConnectionStatus('ready');
         setConnectionError(null);
-        fetchChatHistory()
+        const sessionKeyWhenHistoryRequested = routingSessionKeyRef.current;
+        fetchChatHistory(100, sessionKeyWhenHistoryRequested || undefined)
           .then((history) => {
+            if (routingSessionKeyRef.current !== sessionKeyWhenHistoryRequested) return;
             syncStateFromFetchedHistory(history);
           })
           .catch((err) => {
@@ -260,19 +335,46 @@ export default function App() {
     lastStreamActivityAtRef.current = Date.now();
   };
 
-  const handleConfirmNewChat = async () => {
-    setNewChatBusy(true);
+  const startNewConversationThread = async () => {
+    setNewConversationBusy(true);
     try {
-      startNewWebchatSession();
+      const newSessionKey = generateWebchatSessionKey();
+      const label = nextThreadLabel(threadsSnapshot);
+      const nextSnapshot = addThreadToSnapshot(threadsSnapshot, label, newSessionKey);
+      routingSessionKeyRef.current = newSessionKey;
+      const fetchGeneration = ++historyFetchGenerationRef.current;
+      commitThreadsSnapshot(nextSnapshot);
       resetLocalChatState();
-      const history = await fetchChatHistory();
+      const history = await fetchChatHistory(100, newSessionKey);
+      if (fetchGeneration !== historyFetchGenerationRef.current) return;
       syncStateFromFetchedHistory(history);
     } catch (err) {
       console.error('[OpenClaw gateway] new chat / chat.history failed:', err);
     } finally {
-      setNewChatBusy(false);
-      setNewChatDialogOpen(false);
+      setNewConversationBusy(false);
     }
+  };
+
+  const handleSelectThread = (threadId: string) => {
+    if (threadId === threadsSnapshot.activeThreadId) {
+      setThreadDrawerOpen(false);
+      return;
+    }
+    const target = threadsSnapshot.threads.find((t) => t.threadId === threadId);
+    if (!target) return;
+    const fetchGeneration = ++historyFetchGenerationRef.current;
+    routingSessionKeyRef.current = target.sessionKey;
+    commitThreadsSnapshot(setActiveThreadInSnapshot(threadsSnapshot, threadId));
+    resetLocalChatState();
+    setThreadDrawerOpen(false);
+    fetchChatHistory(100, target.sessionKey)
+      .then((history) => {
+        if (fetchGeneration !== historyFetchGenerationRef.current) return;
+        syncStateFromFetchedHistory(history);
+      })
+      .catch((err) => {
+        console.error('[OpenClaw gateway] chat.history failed on thread switch:', err);
+      });
   };
 
   const handleSend = (text: string) => {
@@ -281,6 +383,20 @@ export default function App() {
       setConnectionError('Not connected. Please wait for the gateway to connect.');
       return;
     }
+    const sessionKeyForSend = activeThread?.sessionKey;
+    if (!sessionKeyForSend) {
+      setConnectionError('No active conversation. Pick a thread from the list.');
+      return;
+    }
+
+    setThreadsSnapshot((previousSnapshot) => {
+      const touched = touchThreadInSnapshot(previousSnapshot, previousSnapshot.activeThreadId);
+      const nextSnapshot = sessionKeyPinnedByBuild
+        ? collapseThreadsSnapshotForPinnedSessionKey(touched)
+        : touched;
+      persistChatThreadsSnapshot(nextSnapshot);
+      return nextSnapshot;
+    });
 
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text };
     setMessages((prev) => [...prev, userMsg]);
@@ -298,11 +414,124 @@ export default function App() {
       { id: aiMsgId, role: 'ai', kind: 'assistant', content: '' },
     ]);
 
-    sendChatMessage(text);
+    sendChatMessage(text, { sessionKey: sessionKeyForSend });
   };
+
+  const threadDrawer = (
+    <Box sx={{ width: THREAD_DRAWER_WIDTH, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Toolbar
+        variant="dense"
+        disableGutters
+        sx={{
+          minHeight: 48,
+          px: 1.5,
+          pr: 0.5,
+          borderBottom: 1,
+          borderColor: 'divider',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 0.5,
+        }}
+      >
+        <Typography variant="subtitle2" component="p" sx={{ fontWeight: 600, flex: 1, minWidth: 0 }}>
+          Conversations
+        </Typography>
+        <Tooltip
+          title={
+            sessionKeyPinnedByBuild
+              ? 'Session key is fixed in the build (VITE_OPENCLAW_SESSION_KEY). Remove it in .env.local to start new chats from this UI.'
+              : newConversationBusy
+                ? 'Creating conversation…'
+                : 'New conversation'
+          }
+        >
+          <span>
+            <IconButton
+              size="small"
+              color="inherit"
+              edge="end"
+              aria-label="New conversation"
+              disabled={
+                connectionStatus !== 'ready' ||
+                isAgentRunBlockingInput(agentActivity) ||
+                sessionKeyPinnedByBuild ||
+                newConversationBusy
+              }
+              onClick={() => void startNewConversationThread()}
+            >
+              <AddCommentIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Toolbar>
+      <List dense sx={{ flex: 1, overflowY: 'auto', py: 0 }}>
+        {sortedThreads.map((thread) => {
+          const isRowActive = thread.threadId === threadsSnapshot.activeThreadId;
+          const messageCountForRow = isRowActive
+            ? activeConversationStats.messageCount
+            : (thread.cachedMessageCount ?? 0);
+          const characterCountForRow = isRowActive
+            ? activeConversationStats.textCharacterCount
+            : (thread.cachedApproxTextCharacters ?? 0);
+          const sessionKeyLine =
+            thread.sessionKey.length > 36 ? `${thread.sessionKey.slice(0, 18)}…` : thread.sessionKey;
+          return (
+            <ListItemButton
+              key={thread.threadId}
+              selected={isRowActive}
+              onClick={() => handleSelectThread(thread.threadId)}
+            >
+              <ListItemText
+                primary={thread.label}
+                secondary={`${messageCountForRow} msgs · ~${characterCountForRow.toLocaleString()} chars\n${sessionKeyLine}`}
+                primaryTypographyProps={{ noWrap: true }}
+                secondaryTypographyProps={{
+                  sx: {
+                    fontSize: '0.62rem',
+                    opacity: 0.88,
+                    whiteSpace: 'pre-line',
+                    wordBreak: 'break-all',
+                    lineHeight: 1.35,
+                  },
+                }}
+              />
+            </ListItemButton>
+          );
+        })}
+      </List>
+    </Box>
+  );
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {isMobile ? (
+        <Drawer
+          anchor="left"
+          open={threadDrawerOpen}
+          onClose={() => setThreadDrawerOpen(false)}
+          ModalProps={{ keepMounted: true }}
+        >
+          {threadDrawer}
+        </Drawer>
+      ) : (
+        <Drawer
+          variant="permanent"
+          open
+          sx={{
+            width: THREAD_DRAWER_WIDTH,
+            flexShrink: 0,
+            '& .MuiDrawer-paper': {
+              width: THREAD_DRAWER_WIDTH,
+              boxSizing: 'border-box',
+              borderRight: 1,
+              borderColor: 'divider',
+            },
+          }}
+        >
+          {threadDrawer}
+        </Drawer>
+      )}
       <Box
         sx={{
           flex: 1,
@@ -313,159 +542,154 @@ export default function App() {
           overflow: 'hidden',
         }}
       >
-        <Paper elevation={0} sx={{ p: 2, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 0 }}>
-          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
-            <Box sx={{ minWidth: 0 }}>
-              <Typography variant="h6" component="h1">
-                OpenClaw UI
-              </Typography>
+        <Paper elevation={0} sx={{ py: 0.75, px: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 0 }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns:
+                connectionStatus === 'ready' && activeThread
+                  ? 'minmax(0, 1fr) max-content'
+                  : 'minmax(0, 1fr)',
+              alignItems: 'start',
+              columnGap: 1.25,
+              rowGap: 0.35,
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+              {isMobile && (
+                <IconButton
+                  color="inherit"
+                  size="small"
+                  aria-label="Open conversation list"
+                  onClick={() => setThreadDrawerOpen(true)}
+                  sx={{ p: 0.5, flexShrink: 0, opacity: 0.92 }}
+                >
+                  <MenuIcon fontSize="small" />
+                </IconButton>
+              )}
               <Typography
-                variant="caption"
-                component="p"
-                sx={{ display: 'block', mt: 0.25, opacity: 0.72, fontSize: '0.68rem', letterSpacing: '0.02em' }}
+                component="h1"
+                sx={{
+                  position: 'absolute',
+                  width: '1px',
+                  height: '1px',
+                  p: 0,
+                  m: '-1px',
+                  overflow: 'hidden',
+                  clip: 'rect(0, 0, 0, 0)',
+                  whiteSpace: 'nowrap',
+                  border: 0,
+                }}
               >
-                {appVersion}
+                OpenClaw
               </Typography>
-              {connectionStatus === 'connecting' && (
-                <Typography variant="caption" sx={{ opacity: 0.9 }}>
-                  Connecting…
-                </Typography>
-              )}
-              {connectionStatus === 'disconnected' && connectionError && (
-                <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', mt: 0.5 }}>
-                  {connectionError}
-                </Typography>
-              )}
-              {connectionStatus === 'error' && connectionError && (
-                <Typography variant="caption" sx={{ opacity: 0.9 }}>
-                  {connectionError}
-                </Typography>
-              )}
-              {connectionStatus === 'ready' && agentActivity !== 'idle' && (
-                <Chip
-                  size="small"
-                  label={
-                    agentActivity === 'pending'
-                      ? 'Waiting'
-                      : agentActivity === 'reasoning'
-                        ? 'Thinking'
-                        : agentActivity === 'acting'
-                          ? 'Using tools'
-                          : agentActivity === 'responding'
-                            ? 'Writing'
-                            : 'No recent activity'
-                  }
-                  sx={{ mt: 0.75, height: 22, fontSize: '0.7rem', bgcolor: 'rgba(255,255,255,0.2)' }}
-                />
-              )}
-              {connectionStatus === 'ready' && runTerminalNotice && (
-                <Chip
-                  size="small"
-                  color={runTerminalNotice.kind === 'error' ? 'error' : 'default'}
-                  label={
-                    runTerminalNotice.kind === 'aborted'
-                      ? 'Stopped'
-                      : runTerminalNotice.message.slice(0, 80) +
-                        (runTerminalNotice.message.length > 80 ? '…' : '')
-                  }
-                  onDelete={() => setRunTerminalNotice(null)}
-                  sx={{ mt: 0.5, height: 22, maxWidth: '100%', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
-                />
-              )}
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
-              <Tooltip
-                title={
-                  sessionKeyPinnedByBuild
-                    ? 'Session key is fixed in the build (VITE_OPENCLAW_SESSION_KEY). Remove it in .env.local to start new chats from this UI.'
-                    : 'Start a new conversation (the current thread cannot be reopened here)'
-                }
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: 0.5,
+                  columnGap: 1,
+                  minWidth: 0,
+                }}
               >
-                <span>
-                  <IconButton
-                    color="inherit"
+                <Typography
+                  variant="caption"
+                  component="span"
+                  sx={{ opacity: 0.72, fontSize: '0.68rem', letterSpacing: '0.02em' }}
+                >
+                  {appVersion}
+                </Typography>
+                {connectionStatus === 'connecting' && (
+                  <Typography variant="caption" component="span" sx={{ opacity: 0.88, fontSize: '0.68rem' }}>
+                    Connecting…
+                  </Typography>
+                )}
+                {connectionStatus === 'disconnected' && connectionError && (
+                  <Typography
+                    variant="caption"
+                    component="span"
+                    sx={{ opacity: 0.88, fontSize: '0.68rem', lineHeight: 1.3 }}
+                  >
+                    {connectionError}
+                  </Typography>
+                )}
+                {connectionStatus === 'error' && connectionError && (
+                  <Typography variant="caption" component="span" sx={{ opacity: 0.88, fontSize: '0.68rem' }}>
+                    {connectionError}
+                  </Typography>
+                )}
+                {connectionStatus === 'ready' && agentActivity !== 'idle' && (
+                  <Chip
                     size="small"
-                    aria-label="New chat"
-                    disabled={
-                      connectionStatus !== 'ready' ||
-                      isAgentRunBlockingInput(agentActivity) ||
-                      sessionKeyPinnedByBuild
+                    label={
+                      agentActivity === 'pending'
+                        ? 'Waiting'
+                        : agentActivity === 'reasoning'
+                          ? 'Thinking'
+                          : agentActivity === 'acting'
+                            ? 'Using tools'
+                            : agentActivity === 'responding'
+                              ? 'Writing'
+                              : 'No recent activity'
                     }
-                    onClick={() => setNewChatDialogOpen(true)}
-                    sx={{ opacity: 0.92 }}
-                  >
-                    <ChatBubbleOutlineIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              {(sanitizeDisplayText(activeReasoning).trim() || lastHistoricalChainOfThought) && (
-                <Tooltip title="Chain of thought">
-                  <IconButton
-                    color="inherit"
+                    sx={{ height: 20, fontSize: '0.65rem', bgcolor: 'rgba(255,255,255,0.2)' }}
+                  />
+                )}
+                {connectionStatus === 'ready' && runTerminalNotice && (
+                  <Chip
                     size="small"
-                    aria-label="Open chain of thought"
-                    onClick={() => {
-                      const activeTrim = sanitizeDisplayText(activeReasoning).trim();
-                      if (activeTrim) {
-                        const refSnapshot = [...recentThoughtsRef.current];
-                        if (refSnapshot.length > 0) {
-                          setCotModalPayload({ mode: 'structured', thoughtItems: refSnapshot });
-                        } else {
-                          setCotModalPayload({ mode: 'plain', text: activeReasoning });
-                        }
-                      } else if (lastHistoricalChainOfThought) {
-                        if (lastHistoricalChainOfThought.kind === 'structured') {
-                          setCotModalPayload({
-                            mode: 'structured',
-                            thoughtItems: lastHistoricalChainOfThought.thoughtItems,
-                            ...(lastHistoricalChainOfThought.proseReasoning
-                              ? { proseReasoning: lastHistoricalChainOfThought.proseReasoning }
-                              : {}),
-                          });
-                        } else {
-                          setCotModalPayload({
-                            mode: 'plain',
-                            text: sanitizeDisplayText(lastHistoricalChainOfThought.text),
-                          });
-                        }
-                      } else {
-                        setCotModalPayload({ mode: 'plain', text: '' });
-                      }
-                      setCotOpen(true);
+                    color={runTerminalNotice.kind === 'error' ? 'error' : 'default'}
+                    label={
+                      runTerminalNotice.kind === 'aborted'
+                        ? 'Stopped'
+                        : runTerminalNotice.message.slice(0, 80) +
+                          (runTerminalNotice.message.length > 80 ? '…' : '')
+                    }
+                    onDelete={() => setRunTerminalNotice(null)}
+                    sx={{
+                      height: 20,
+                      maxWidth: '100%',
+                      fontSize: '0.65rem',
+                      '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
                     }}
-                    sx={{ opacity: 0.92 }}
-                  >
-                    <PsychologyOutlinedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              )}
+                  />
+                )}
+              </Box>
             </Box>
+            {connectionStatus === 'ready' && activeThread && (
+              <Box sx={{ justifySelf: 'end', minWidth: 0, alignSelf: 'start' }}>
+                <Tooltip
+                  title="Rows in this transcript and total characters (user + assistant text, reasoning, and trace lines). Rough guide only—not model tokens or exact context window usage."
+                  placement="bottom-end"
+                >
+                  <Typography
+                    variant="caption"
+                    component="span"
+                    sx={{
+                      display: 'block',
+                      m: 0,
+                      pt: 0.125,
+                      cursor: 'help',
+                      opacity: 0.7,
+                      fontSize: '0.68rem',
+                      lineHeight: 1.35,
+                      letterSpacing: '0.01em',
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap',
+                      maxWidth: 'min(280px, 42vw)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {activeConversationStats.messageCount} messages · ~
+                    {activeConversationStats.textCharacterCount.toLocaleString()} chars
+                  </Typography>
+                </Tooltip>
+              </Box>
+            )}
           </Box>
         </Paper>
-
-        <Dialog
-          open={newChatDialogOpen}
-          onClose={() => !newChatBusy && setNewChatDialogOpen(false)}
-          aria-labelledby="new-chat-dialog-title"
-        >
-          <DialogTitle id="new-chat-dialog-title">New chat?</DialogTitle>
-          <DialogContent>
-            <DialogContentText component="div">
-              This starts a <strong>new gateway session</strong> for this browser (new session key in
-              local storage). The current conversation will disappear from this app and cannot be
-              reopened here. Older transcripts may still exist on the gateway under the previous
-              session id.
-            </DialogContentText>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setNewChatDialogOpen(false)} disabled={newChatBusy}>
-              Cancel
-            </Button>
-            <Button onClick={() => void handleConfirmNewChat()} color="primary" disabled={newChatBusy}>
-              {newChatBusy ? 'Starting…' : 'New chat'}
-            </Button>
-          </DialogActions>
-        </Dialog>
 
         {connectionError && connectionStatus === 'error' && (
           <Alert

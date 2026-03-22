@@ -61,6 +61,8 @@ function logUnhandled(data: unknown) {
 }
 
 let socket: WebSocket | null = null;
+/** When set, `chat` events whose `payload.sessionKey` differs are ignored (multi-thread UI). */
+let getActiveChatSessionKeyForChatRouting: (() => string | undefined) | null = null;
 let onMessageCallback: ((message: unknown) => void) | null = null;
 let onReasoningCallback: ((chunk: string) => void) | null = null;
 let onContentCallback: ((chunk: string) => void) | null = null;
@@ -404,6 +406,17 @@ interface ChatEventPayload {
 function handleChatEvent(payload: ChatEventPayload | undefined) {
   if (!payload) return;
 
+  const eventSessionKey = payload.sessionKey?.trim();
+  const activeForRouting = getActiveChatSessionKeyForChatRouting?.()?.trim();
+  if (eventSessionKey && activeForRouting && eventSessionKey !== activeForRouting) {
+    if (DEBUG) {
+      console.log(
+        `${LOG} chat event ignored (sessionKey mismatch) event=${eventSessionKey} active=${activeForRouting}`
+      );
+    }
+    return;
+  }
+
   const { state, message, errorMessage, runId, seq } = payload;
 
   if (state === 'delta') {
@@ -454,13 +467,14 @@ function sendReq<T>(method: string, params: Record<string, unknown>): Promise<T>
   });
 }
 
-export function sendChatMessage(message: string): void {
+export function sendChatMessage(message: string, options?: { sessionKey?: string }): void {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     console.error(`${LOG} cannot send: not connected`);
     return;
   }
+  const key = options?.sessionKey?.trim() || sessionKey();
   const params = {
-    sessionKey: sessionKey(),
+    sessionKey: key,
     message,
     idempotencyKey: crypto.randomUUID(),
   };
@@ -475,9 +489,10 @@ export function sendMessageToGateway(message: string) {
   sendChatMessage(message);
 }
 
-export function fetchChatHistory(limit = 100): Promise<FetchedChatMessage[]> {
+export function fetchChatHistory(limit = 100, sessionKeyOverride?: string): Promise<FetchedChatMessage[]> {
+  const key = sessionKeyOverride?.trim() || sessionKey();
   return sendReq<ChatHistoryResponse | RawHistoryMessage[]>('chat.history', {
-    sessionKey: sessionKey(),
+    sessionKey: key,
     limit,
   }).then((res) => {
     const list = Array.isArray(res) ? res : (res?.messages ?? []);
@@ -516,6 +531,7 @@ export function initGatewayConnection({
   onConnected,
   onConnectError,
   onDisconnected,
+  getActiveChatSessionKey,
 }: {
   onMessage: (message: unknown) => void;
   onReasoning: (chunk: string) => void;
@@ -531,7 +547,13 @@ export function initGatewayConnection({
   onConnectError?: (error: string) => void;
   /** Socket closed after a successful handshake (not a deliberate `disconnectGateway` / client close). */
   onDisconnected?: () => void;
+  /**
+   * Return the UI’s active gateway `sessionKey`. When the gateway includes `sessionKey` on `chat` events,
+   * events for other sessions are ignored so background threads do not mutate the visible transcript.
+   */
+  getActiveChatSessionKey?: () => string | undefined;
 }) {
+  getActiveChatSessionKeyForChatRouting = getActiveChatSessionKey ?? null;
   onMessageCallback = onMessage;
   onReasoningCallback = onReasoning;
   onContentCallback = onContent;
