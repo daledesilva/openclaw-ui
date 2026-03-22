@@ -1,16 +1,10 @@
-import type { AssistantDisplayPayload, FetchedChatMessage } from '../api/gateway-types';
-import type { Message, ThoughtItem } from '../chatThreadTypes';
-import { summarizeToolCall, summarizeToolResult } from './toolBubbleSummary';
+import { useCallback, useState } from 'react';
+import type { RawHistoryItem } from '../api/gateway-types';
+import type { FetchedChatMessage, GatewayStreamEvent } from '../api/gateway';
+import type { ChatMessage, ThoughtItem } from '../chatThreadTypes';
+import { sanitizeDisplayText } from './sanitizeDisplayText';
 
-export type { ThoughtItem };
-
-export function appendThoughtItem(thoughts: ThoughtItem[], item: ThoughtItem): ThoughtItem[] {
-  if (item.kind === 'toolHint' && thoughts.length > 0) {
-    const last = thoughts[thoughts.length - 1]!;
-    if (last.kind === 'toolHint' && last.label === item.label) return thoughts;
-  }
-  return [...thoughts, item];
-}
+//
 
 /** True when opening the chain-of-thought modal would have structured or prose content. */
 export function traceHasDisplayableContent(
@@ -23,296 +17,115 @@ export function traceHasDisplayableContent(
   return thoughtItems.length > 0;
 }
 
-/** Last `toolHint` label or `toolResult` summary in the buffer (search from end). */
-export function deriveLastToolSummaryLine(items: ThoughtItem[]): string | null {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const t = items[i]!;
-    if (t.kind === 'toolHint') return t.label;
-    if (t.kind === 'toolResult') return t.summary;
-  }
-  return null;
-}
-
-export function findLastAssistantIndex(messages: Message[]): number {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (m.role === 'ai' && (!m.kind || m.kind === 'assistant')) return i;
-  }
-  return -1;
-}
-
-/**
- * Insert a reasoning trace bubble immediately before the last assistant message.
- * Returns a new array, or null if there is nothing to insert or no assistant slot.
- */
-export function withReasoningTraceBeforeLastAssistant(
-  messages: Message[],
-  options: { thoughtItems: ThoughtItem[]; traceId: string; proseReasoning?: string }
-): Message[] | null {
-  const hasProse = !!options.proseReasoning?.trim();
-  if (options.thoughtItems.length === 0 && !hasProse) return null;
-  const assistantIdx = findLastAssistantIndex(messages);
-  if (assistantIdx < 0) return null;
-  const trace: Message = {
-    id: options.traceId,
-    role: 'ai',
-    kind: 'reasoningTrace',
-    content: '',
-    thoughtItems: options.thoughtItems.length > 0 ? options.thoughtItems : [],
-    ...(hasProse ? { proseReasoning: options.proseReasoning!.trim() } : {}),
+export function createUserChatMessage(historyItem: RawHistoryItem): ChatMessage {
+  return {
+    ...historyItem,
   };
-  return [...messages.slice(0, assistantIdx), trace, messages[assistantIdx]!];
 }
 
-export function mergeAssistantFinalIntoMessages(
-  prev: Message[],
-  payload: AssistantDisplayPayload
-): Message[] {
-  const lastIdx = prev.length - 1;
-  if (lastIdx < 0) return prev;
-  const last = prev[lastIdx]!;
-  if (last.role !== 'ai') return prev;
-  if (last.kind && last.kind !== 'assistant') return prev;
-
-  const mergedAssistant: Message = {
-    ...last,
-    kind: 'assistant',
-    content: payload.content,
-    isError: payload.isError,
-    ...(payload.estimatedCostUsd !== undefined
-      ? { estimatedCostUsd: payload.estimatedCostUsd }
-      : {}),
+export function createAgentChatMessage(historyItem: RawHistoryItem, thoughtItems: ThoughtItem[]): ChatMessage {
+  return {
+    ...historyItem,
+    thoughtItems,
   };
-  return [...prev.slice(0, lastIdx), mergedAssistant];
 }
 
-/**
- * On gateway `final`: optionally splice trace before last assistant, merge final payload into that assistant.
- */
-export function applyAssistantFinalWithThoughtBuffer(
-  prev: Message[],
-  payload: AssistantDisplayPayload,
-  thoughtBuffer: ThoughtItem[],
-  traceId: string
-): Message[] {
-  let next = prev;
-  const proseReasoning = payload.reasoning.trim() ? payload.reasoning : undefined;
-  if (thoughtBuffer.length > 0 || proseReasoning) {
-    const withTrace = withReasoningTraceBeforeLastAssistant(prev, {
-      thoughtItems: thoughtBuffer,
-      traceId,
-      proseReasoning,
-    });
-    if (withTrace) next = withTrace;
-  }
-  return mergeAssistantFinalIntoMessages(next, payload);
-}
+export function parseHistoryIntoChatMessages(historyItems: RawHistoryItem[]): ChatMessage[] {
+  const chatMessages: ChatMessage[] = [];
+  let thoughtBuffer: ThoughtItem[] = [];
 
-/**
- * True when this assistant history row would show something in the main assistant bubble
- * (user-visible body or error). Not tool-only or thinking-only rows.
- */
-export function assistantHistoryRowDisplaysToUser(msg: FetchedChatMessage): boolean {
-  const role = msg.role.toLowerCase();
-  if (role !== 'assistant' && role !== 'ai') return false;
-  return msg.content.trim().length > 0 || !!msg.isError;
-}
+  historyItems.forEach((historyItem) => {
+    const role = historyItem.role?.toLowerCase();
 
-/**
- * Rebuild thread messages from `chat.history` using the same trace + assistant ordering as live.
- */
-export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Message[] {
-  const out: Message[] = [];
-  let buffer: ThoughtItem[] = [];
-  let pendingUsd = 0;
-
-  history.forEach((msg, index) => {
-    if (msg.role === 'toolresult') {
-      buffer = appendThoughtItem(buffer, {
-        kind: 'toolResult',
-        summary: summarizeToolResult({
-          toolName: msg.toolName,
-          isError: msg.isError,
-          raw: msg.toolRawPayload,
-        }),
-      });
-      return;
-    }
-
-    const idBase = `hist-${msg.timestamp ?? 'x'}-${index}`;
-
-    if (msg.role === 'assistant' || msg.role === 'ai') {
-      for (const tc of msg.toolCalls ?? []) {
-        buffer = appendThoughtItem(buffer, { kind: 'toolHint', label: summarizeToolCall(tc) });
-      }
-
-      const reasoningTrimmed = msg.reasoning.trim();
-      if (reasoningTrimmed) {
-        buffer = appendThoughtItem(buffer, { kind: 'reasoningChunk', text: reasoningTrimmed });
-      }
-
-      const rowEstimate = msg.estimatedCostUsd;
-      if (!assistantHistoryRowDisplaysToUser(msg)) {
-        if (rowEstimate !== undefined) pendingUsd += rowEstimate;
+    switch (role) {
+      case 'user':
+        chatMessages.push(createUserChatMessage(historyItem));
         return;
-      }
 
-      if (buffer.length > 0) {
-        out.push({
-          id: `${idBase}-trace`,
-          role: 'ai',
-          kind: 'reasoningTrace',
-          content: '',
-          thoughtItems: [...buffer],
+      case 'toolresult':
+        thoughtBuffer.push({
+          kind: 'toolCall',
+          ...historyItem,
         });
-        buffer = [];
-      }
+        return;
 
-      const carry = pendingUsd;
-      pendingUsd = 0;
-      const part = rowEstimate ?? 0;
-      const bubbleTotal = carry + part;
-      const costField =
-        bubbleTotal !== 0 || rowEstimate !== undefined ? { estimatedCostUsd: bubbleTotal } : {};
+      case 'assistant':
+      case 'ai':
+        chatMessages.push(createAgentChatMessage(historyItem, thoughtBuffer));
+        thoughtBuffer = [];
+        return;
 
-      out.push({
-        id: idBase,
-        role: 'ai',
-        kind: 'assistant',
-        content: msg.content,
-        senderLabel: msg.senderLabel,
-        timestamp: msg.timestamp,
-        isError: msg.isError,
-        ...costField,
-      });
-      return;
+      default:
+        return;
     }
-
-    out.push({
-      id: idBase,
-      role: msg.role === 'user' ? 'user' : 'ai',
-      content: msg.content,
-      reasoning: msg.reasoning?.trim() ? msg.reasoning : undefined,
-      senderLabel: msg.senderLabel,
-      timestamp: msg.timestamp,
-      isError: msg.isError,
-    });
   });
 
-  if (buffer.length > 0) {
-    out.push({
-      id: `hist-orphan-${history.length}`,
-      role: 'ai',
-      kind: 'reasoningTrace',
-      content: '',
-      thoughtItems: [...buffer],
-    });
-  }
-
-  if (pendingUsd !== 0) {
-    for (let i = out.length - 1; i >= 0; i--) {
-      const m = out[i]!;
-      if (m.role === 'ai' && m.kind === 'assistant') {
-        out[i] = {
-          ...m,
-          estimatedCostUsd: (m.estimatedCostUsd ?? 0) + pendingUsd,
-        };
-        break;
-      }
-    }
-  }
-
-  return out;
+  return chatMessages;
 }
-
-/** One row in the chain-of-thought modal (after merging adjacent streamed chunks). */
-export type ThoughtProcessModalSegment =
-  | { kind: 'toolHint'; text: string }
-  | { kind: 'toolResult'; text: string }
-  | { kind: 'reasoning'; text: string }
-  | { kind: 'prose'; text: string };
 
 /**
- * Turns `ThoughtItem[]` into modal rows: consecutive `reasoningChunk` merged into one segment,
- * then optional `proseReasoning` as a final segment.
+ * `fetchChatHistory` returns normalized rows; the fold buffer logic expects raw-shaped roles
+ * (`user` / `toolresult` / `assistant` / `ai`), which these rows satisfy.
  */
-export function thoughtItemsToModalSegments(
-  items: ThoughtItem[],
-  proseReasoning?: string
-): ThoughtProcessModalSegment[] {
-  const segments: ThoughtProcessModalSegment[] = [];
-  let reasoningBuffer = '';
-
-  const flushReasoning = () => {
-    const trimmed = reasoningBuffer.trim();
-    if (trimmed) {
-      segments.push({ kind: 'reasoning', text: trimmed });
-    }
-    reasoningBuffer = '';
-  };
-
-  for (const item of items) {
-    if (item.kind === 'reasoningChunk') {
-      reasoningBuffer += item.text;
-    } else {
-      flushReasoning();
-      if (item.kind === 'toolHint') {
-        segments.push({ kind: 'toolHint', text: item.label });
-      } else {
-        segments.push({ kind: 'toolResult', text: item.summary });
-      }
-    }
-  }
-  flushReasoning();
-
-  const proseTrimmed = proseReasoning?.trim();
-  if (proseTrimmed) {
-    segments.push({ kind: 'prose', text: proseTrimmed });
-  }
-
-  return segments;
+export function parseFetchedHistoryIntoChatMessages(history: FetchedChatMessage[]): ChatMessage[] {
+  return parseHistoryIntoChatMessages(history as unknown as RawHistoryItem[]);
 }
 
-/** Latest completed trace or legacy assistant reasoning for header / history modal. */
-export function findLastHistoricalChainOfThought(
-  messages: Message[]
-):
-  | { kind: 'structured'; thoughtItems: ThoughtItem[]; proseReasoning?: string }
-  | { kind: 'plain'; text: string }
-  | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!;
-    if (m.kind === 'reasoningTrace') {
-      const thoughtItems = m.thoughtItems ?? [];
-      const prose = m.proseReasoning;
-      if (thoughtItems.length > 0 || prose?.trim()) {
-        return {
-          kind: 'structured',
-          thoughtItems,
-          ...(prose?.trim() ? { proseReasoning: prose.trim() } : {}),
+/**
+ * Owns transcript rows, the live thought buffer, and all `RawHistoryItem` / `FetchedChatMessage` folding.
+ */
+export function useChatMessageThread() {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [recentThoughts, setRecentThoughts] = useState<ThoughtItem[]>([]);
+
+  const appendAssistantContentDelta = useCallback((chunk: string) => {
+    const safe = sanitizeDisplayText(chunk);
+    setMessages((prev) => {
+      const lastMsg = prev[prev.length - 1];
+      if (lastMsg && (lastMsg.role === 'assistant' || lastMsg.role === 'ai')) {
+        const updatedMessages = [...prev];
+        const priorContent = typeof lastMsg.content === 'string' ? lastMsg.content : '';
+        updatedMessages[updatedMessages.length - 1] = {
+          ...lastMsg,
+          content: priorContent + safe,
         };
+        return updatedMessages;
       }
-    }
-    if (m.role === 'ai' && (!m.kind || m.kind === 'assistant') && m.reasoning?.trim()) {
-      return { kind: 'plain', text: m.reasoning };
-    }
-  }
-  return null;
-}
+      return prev;
+    });
+  }, []);
 
-/** Format trace + prose for the chain-of-thought modal. */
-export function formatThoughtItemsForModal(items: ThoughtItem[], proseReasoning?: string): string {
-  const toolLines: string[] = [];
-  const reasoningParts: string[] = [];
-  for (const item of items) {
-    if (item.kind === 'toolHint') toolLines.push(`• ${item.label}`);
-    else if (item.kind === 'toolResult') toolLines.push(`• Result: ${item.summary}`);
-    else reasoningParts.push(item.text);
-  }
-  const chunks = [
-    toolLines.length ? `Tools\n${toolLines.join('\n')}` : '',
-    reasoningParts.join('').trim() ? reasoningParts.join('') : '',
-    proseReasoning?.trim() ? proseReasoning.trim() : '',
-  ].filter(Boolean);
-  return chunks.join('\n\n---\n\n');
+  const handleStreamEvent = useCallback(
+    (event: GatewayStreamEvent) => {
+      switch (event.kind) {
+        case 'reasoning':
+          setRecentThoughts((prev) => [...prev, { kind: 'internalMonologue', thought: event.text }]);
+          break;
+        case 'content':
+          // appendAssistantContentDelta(event.text);
+          setMessages((prev) => [...prev, { role: 'assistant', content: event.text }]);
+          break;
+        // case 'chatDelta':
+        // case 'agentStreamToolHint':
+        //   onStreamActivityRef.current?.();
+        //   break;
+        // case 'assistantFinal':
+        //   break;
+        case 'chatTerminal':
+          setRecentThoughts([]);
+          break;
+      }
+    },
+    [appendAssistantContentDelta]
+  );
+
+  const addUserMessage = useCallback((message: string) => {
+    setMessages((prev) => [...prev, { role: 'user', content: message }]);
+  }, []);
+
+  return {
+    messages,
+    addUserMessage,
+    handleStreamEvent,
+  };
 }

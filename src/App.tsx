@@ -24,12 +24,8 @@ import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtModal, type ChainOfThoughtModalContent } from './components/ChainOfThoughtModal';
 import { GoogleGeminiPricingModal } from './components/GoogleGeminiPricingModal';
 import { TokenSetupScreen } from './components/TokenSetupScreen';
-import type { Message, ThoughtItem } from './chatThreadTypes';
-import {
-  appendThoughtItem,
-  applyAssistantFinalWithThoughtBuffer,
-  foldFetchedHistoryToMessages,
-} from './utils/recentThoughtsReducer';
+import type { ChatMessage } from './chatThreadTypes';
+import { useChatMessageThread } from './utils/recentThoughtsReducer';
 import {
   initGatewayConnection,
   sendChatMessage,
@@ -41,6 +37,7 @@ import {
   clearStoredGatewayToken,
   disconnectGateway,
   requestGatewayReconnect,
+  type GatewayStreamEvent,
 } from './api/gateway';
 import {
   displayTotalTokens,
@@ -74,9 +71,7 @@ import {
   type ChatThreadsSnapshot,
 } from './utils/chatThreadsStorage';
 import { computeThreadMessageCount } from './utils/conversationStats';
-import type { FetchedChatMessage } from './api/gateway';
 import { useLiveAppVersion } from './useLiveAppVersion';
-import { sanitizeDisplayText } from './utils/sanitizeDisplayText';
 import { sumMessageEstimatedUsd } from './utils/geminiPricingEstimate';
 import {
   type AssistantRunChromeState,
@@ -84,7 +79,7 @@ import {
   isAssistantRunBlockingInput,
 } from './utils/assistantRunChrome';
 
-export type { Message } from './chatThreadTypes';
+export type { ChatMessage as Message } from './chatThreadTypes';
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'ready' | 'error';
 
@@ -98,11 +93,17 @@ type RunTerminalNotice = { kind: 'error'; message: string } | { kind: 'aborted' 
 export default function App() {
   const appVersion = useLiveAppVersion();
   const [tokenReady, setTokenReady] = useState(hasGatewayToken());
-  const [messages, setMessages] = useState<Message[]>([]);
+  const lastStreamActivityAtRef = useRef<number>(Date.now());
+  const touchStreamActivity = useCallback(() => {
+    lastStreamActivityAtRef.current = Date.now();
+  }, []);
+  const {
+    messages,
+    handleStreamEvent,
+  } = useChatMessageThread();
   const [assistantRunChrome, setAssistantRunChrome] = useState<AssistantRunChromeState>('idle');
   const assistantRunChromeRef = useRef<AssistantRunChromeState>('idle');
   const [runTerminalNotice, setRunTerminalNotice] = useState<RunTerminalNotice | null>(null);
-  const lastStreamActivityAtRef = useRef<number>(Date.now());
   const [cotOpen, setCotOpen] = useState(false);
   /** Snapshot when opening the chain-of-thought modal (structured trace or plain legacy text). */
   const [cotModalPayload, setCotModalPayload] = useState<ChainOfThoughtModalContent | null>(null);
@@ -124,11 +125,6 @@ export default function App() {
   const historyFetchGenerationRef = useRef(0);
   /** Active gateway `sessionKey` for routing incoming `chat` events (updated synchronously on switch). */
   const routingSessionKeyRef = useRef<string>('');
-  /** Non-answer signals for the current turn; flushed on `onAssistantFinal`. */
-  const recentThoughtsRef = useRef<ThoughtItem[]>([]);
-  /** Bumped when the ref gains items so render re-runs and CoT affordance reads fresh `recentThoughtsRef`. */
-  const [thoughtBufferRevision, setThoughtBufferRevision] = useState(0);
-  const traceSeqRef = useRef(0);
   const sessionKeyPinnedByBuild = isGatewaySessionKeyPinnedByBuild();
   const isMobile = useMediaQuery((theme: Theme) => theme.breakpoints.down('sm'));
   const activeThread = useMemo(
@@ -217,7 +213,7 @@ export default function App() {
   }, [refreshGatewaySessionTokens]);
 
   const sessionsListDebounceRef = useRef<number | null>(null);
-  const scheduleRefreshGatewaySessionTokens = useCallback((delayMs: number) => {
+  const scheduleRefreshSessionMeta = useCallback((delayMs: number) => {
     if (sessionsListDebounceRef.current !== null) window.clearTimeout(sessionsListDebounceRef.current);
     sessionsListDebounceRef.current = window.setTimeout(() => {
       sessionsListDebounceRef.current = null;
@@ -263,29 +259,12 @@ export default function App() {
 
   useEffect(() => {
     if (connectionStatus !== 'ready' || !activeThread?.threadId) return;
-    scheduleRefreshGatewaySessionTokens(150);
-  }, [activeThread?.threadId, connectionStatus, scheduleRefreshGatewaySessionTokens]);
+    scheduleRefreshSessionMeta(150);
+  }, [activeThread?.threadId, connectionStatus, scheduleRefreshSessionMeta]);
 
   useEffect(() => {
     assistantRunChromeRef.current = assistantRunChrome;
   }, [assistantRunChrome]);
-
-  const touchStreamActivity = () => {
-    lastStreamActivityAtRef.current = Date.now();
-  };
-
-  const syncStateFromFetchedHistory = useCallback((history: FetchedChatMessage[]) => {
-    setMessages(foldFetchedHistoryToMessages(history));
-  }, []);
-
-  const appendLiveThoughtItem = useCallback((item: ThoughtItem) => {
-    const prev = recentThoughtsRef.current;
-    const next = appendThoughtItem(prev, item);
-    recentThoughtsRef.current = next;
-    if (next !== prev) {
-      setThoughtBufferRevision((revision) => revision + 1);
-    }
-  }, []);
 
   useEffect(() => {
     if (assistantRunChrome === 'idle' || assistantRunChrome === 'stale') return;
@@ -315,75 +294,9 @@ export default function App() {
           }
         }
       },
-      onReasoning: (chunk) => {
-        touchStreamActivity();
-        const safe = sanitizeDisplayText(chunk);
-        appendLiveThoughtItem({
-          kind: 'reasoningChunk',
-          text: safe,
-        });
-      },
-      onChatDelta: (info) => {
-        touchStreamActivity();
-        if (info.lastToolSummary) {
-          appendLiveThoughtItem({
-            kind: 'toolHint',
-            label: info.lastToolSummary,
-          });
-        }
-      },
-      onAgentStreamToolHint: (label) => {
-        touchStreamActivity();
-        const trimmed = sanitizeDisplayText(label).trim();
-        if (trimmed) {
-          appendLiveThoughtItem({
-            kind: 'toolHint',
-            label: trimmed,
-          });
-        }
-      },
-      onContent: (chunk) => {
-        touchStreamActivity();
-        const safe = sanitizeDisplayText(chunk);
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.role === 'ai' && (!lastMsg.kind || lastMsg.kind === 'assistant')) {
-            const updatedMessages = [...prev];
-            updatedMessages[updatedMessages.length - 1] = {
-              ...lastMsg,
-              content: lastMsg.content + safe,
-            };
-            return updatedMessages;
-          }
-          return prev;
-        });
-      },
-      onAssistantFinal: (payload) => {
-        const bufferSnapshot = [...recentThoughtsRef.current];
-        recentThoughtsRef.current = [];
-        setThoughtBufferRevision((r) => r + 1);
-        traceSeqRef.current += 1;
-        const traceId = `trace-${Date.now()}-${traceSeqRef.current}`;
-        setMessages((prev) =>
-          applyAssistantFinalWithThoughtBuffer(prev, payload, bufferSnapshot, traceId)
-        );
-      },
-      onChatTerminal: (info) => {
-        setAssistantRunChrome('idle');
-        recentThoughtsRef.current = [];
-        setThoughtBufferRevision((r) => r + 1);
-        touchStreamActivity();
-        scheduleRefreshGatewaySessionTokens(300);
-        if (info.state === 'error') {
-          setRunTerminalNotice({
-            kind: 'error',
-            message: (info.errorMessage?.trim() || 'Run failed').slice(0, 500),
-          });
-        } else if (info.state === 'aborted') {
-          setRunTerminalNotice({ kind: 'aborted' });
-        } else {
-          setRunTerminalNotice(null);
-        }
+      onEvent: (event: GatewayStreamEvent) => {
+        handleStreamEvent(event);
+        scheduleRefreshSessionMeta(300);
       },
       onConnected: () => {
         setConnectionStatus('ready');
@@ -393,7 +306,7 @@ export default function App() {
         fetchChatHistory(100, sessionKeyWhenHistoryRequested || undefined)
           .then((history) => {
             if (routingSessionKeyRef.current !== sessionKeyWhenHistoryRequested) return;
-            syncStateFromFetchedHistory(history);
+            // replaceFromFetchedHistory(history);
           })
           .catch((err) => {
             console.error('[OpenClaw gateway] chat.history failed:', err);
@@ -407,25 +320,18 @@ export default function App() {
         setConnectionStatus('disconnected');
         setConnectionError('Disconnected from gateway.');
         setAssistantRunChrome('idle');
-        recentThoughtsRef.current = [];
-        setThoughtBufferRevision((r) => r + 1);
       },
     });
     return () => {
       if (sessionsListDebounceRef.current !== null) window.clearTimeout(sessionsListDebounceRef.current);
       disconnectGateway();
     };
-  }, [tokenReady, syncStateFromFetchedHistory, scheduleRefreshGatewaySessionTokens, appendLiveThoughtItem]);
+  }, [tokenReady, scheduleRefreshSessionMeta, handleStreamEvent]);
 
   const openChainOfThoughtModal = useCallback((content: ChainOfThoughtModalContent) => {
     setCotModalPayload(content);
     setCotOpen(true);
   }, []);
-
-  const liveThoughtItems = useMemo(
-    () => [...recentThoughtsRef.current],
-    [thoughtBufferRevision]
-  );
 
   if (!tokenReady) {
     return <TokenSetupScreen onTokenSet={() => setTokenReady(true)} />;
@@ -437,9 +343,6 @@ export default function App() {
   };
 
   const resetLocalChatState = () => {
-    setMessages([]);
-    recentThoughtsRef.current = [];
-    setThoughtBufferRevision((r) => r + 1);
     setRunTerminalNotice(null);
     setAssistantRunChrome('idle');
     setCotOpen(false);
@@ -459,7 +362,7 @@ export default function App() {
       resetLocalChatState();
       const history = await fetchChatHistory(100, newSessionKey);
       if (fetchGeneration !== historyFetchGenerationRef.current) return;
-      syncStateFromFetchedHistory(history);
+      // replaceFromFetchedHistory(history);
     } catch (err) {
       console.error('[OpenClaw gateway] new chat / chat.history failed:', err);
     } finally {
@@ -482,7 +385,7 @@ export default function App() {
     fetchChatHistory(100, target.sessionKey)
       .then((history) => {
         if (fetchGeneration !== historyFetchGenerationRef.current) return;
-        syncStateFromFetchedHistory(history);
+        // replaceFromFetchedHistory(history);
       })
       .catch((err) => {
         console.error('[OpenClaw gateway] chat.history failed on thread switch:', err);
@@ -510,20 +413,10 @@ export default function App() {
       return nextSnapshot;
     });
 
-    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text };
-    setMessages((prev) => [...prev, userMsg]);
-
-    recentThoughtsRef.current = [];
-    setThoughtBufferRevision((r) => r + 1);
     setRunTerminalNotice(null);
     setAssistantRunChrome('running');
     touchStreamActivity();
 
-    const aiMsgId = (Date.now() + 1).toString();
-    setMessages((prev) => [
-      ...prev,
-      { id: aiMsgId, role: 'ai', kind: 'assistant', content: '' },
-    ]);
 
     sendChatMessage(text, { sessionKey: sessionKeyForSend });
   };
@@ -846,7 +739,6 @@ export default function App() {
         )}
 
         <Box
-          data-live-thought-revision={thoughtBufferRevision}
           sx={{
             flex: 1,
             overflowY: 'auto',
@@ -859,18 +751,18 @@ export default function App() {
             maxWidth: '100%',
           }}
         >
-          {messages.map((msg) =>
-            msg.role === 'user' ? (
-              <UserChatBubble key={msg.id} messageText={msg.content} />
+          {messages.map((msg, messageIndex) => {
+            return msg.role === 'user' ? (
+              <UserChatBubble key={messageIndex} messageText={String(msg.content ?? '')} />
             ) : (
               <AgentChatBubble
-                key={msg.id}
-                messageText={msg.content}
-                thoughtItems={liveThoughtItems}
-                openChainOfThoughtModal={openChainOfThoughtModal}
+                key={messageIndex}
+                messageText={String(msg.content ?? '')}
+                thoughtItems={msg.thoughtItems ?? []}
+                openChainOfThoughtModal={(thoughtItems) => openChainOfThoughtModal(thoughtItems)}
               />
-            )
-          )}
+            );
+          })}
         </Box>
 
         <Box sx={{ p: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>

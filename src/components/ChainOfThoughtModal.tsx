@@ -11,10 +11,6 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import { sanitizeDisplayText } from '../utils/sanitizeDisplayText';
 import type { ThoughtItem } from '../chatThreadTypes';
-import {
-  thoughtItemsToModalSegments,
-  type ThoughtProcessModalSegment,
-} from '../utils/recentThoughtsReducer';
 
 export type ChainOfThoughtModalContent =
   | { mode: 'structured'; thoughtItems: ThoughtItem[]; proseReasoning?: string }
@@ -28,56 +24,78 @@ export interface ChainOfThoughtModalProps {
   content: ChainOfThoughtModalContent;
 }
 
-function segmentCaption(kind: ThoughtProcessModalSegment['kind']): string | undefined {
-  if (kind === 'toolHint') return 'Tool';
-  if (kind === 'toolResult') return 'Result';
-  if (kind === 'prose') return 'Summary';
-  if (kind === 'reasoning') return 'Thought';
-  return undefined;
+/** Plain-text export of trace + prose (same structure as structured modal sections). Exported for tests. */
+export function formatThoughtItemsForModal(items: ThoughtItem[], proseReasoning?: string): string {
+  const toolLines: string[] = [];
+  const reasoningParts: string[] = [];
+  for (const item of items) {
+    if (item.kind === 'toolCall') {
+      const name = item.toolName?.trim() || 'tool';
+      const preview = typeof item.content === 'string' ? item.content : String(item.content ?? '');
+      toolLines.push(preview.trim() ? `• ${name}(${preview})` : `• ${name}()`);
+    } else if (item.kind === 'internalMonologue') {
+      reasoningParts.push(item.thought);
+    }
+  }
+  const chunks = [
+    toolLines.length ? `Tools\n${toolLines.join('\n')}` : '',
+    reasoningParts.join('').trim() ? reasoningParts.join('') : '',
+    proseReasoning?.trim() ? proseReasoning.trim() : '',
+  ].filter(Boolean);
+  return chunks.join('\n\n---\n\n');
 }
 
-function ThoughtSegmentBubble({ segment }: { segment: ThoughtProcessModalSegment }) {
-  const caption = segmentCaption(segment.kind);
-  const body = sanitizeDisplayText(segment.text);
-  return (
-    <Box sx={{ display: 'flex', justifyContent: 'flex-start', width: '100%' }}>
-      <Paper
-        elevation={0}
-        sx={(theme) => ({
-          maxWidth: '90%',
-          px: 1.25,
-          py: 1,
-          borderRadius: '14px',
-          borderTopLeftRadius: theme.spacing(1.5),
-          borderBottomRightRadius: theme.spacing(1.5),
-          backgroundColor: theme.palette.grey[100],
-          color: theme.palette.text.secondary,
-          boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-        })}
-      >
-        {caption ? (
-          <Typography
-            variant="caption"
-            sx={{ display: 'block', fontWeight: 600, opacity: 0.75, mb: 0.25, letterSpacing: '0.02em' }}
-          >
-            {caption}
-          </Typography>
-        ) : null}
-        <Typography
-          variant="body2"
-          component="div"
-          sx={{
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            fontSize: '0.8125rem',
-            lineHeight: 1.45,
-          }}
-        >
-          {body || '\u00a0'}
-        </Typography>
-      </Paper>
-    </Box>
-  );
+// function segmentCaption(kind: ThoughtProcessModalSegment['kind']): string | undefined {
+//   if (kind === 'toolHint') return 'Tool';
+//   if (kind === 'toolResult') return 'Result';
+//   if (kind === 'prose') return 'Summary';
+//   if (kind === 'reasoning') return 'Thought';
+//   return undefined;
+// }
+
+function ThoughtSegmentBubble() {
+  // const caption = segmentCaption(segment.kind);
+  // const body = sanitizeDisplayText(segment.text);
+  // return (
+  //   <Box sx={{ display: 'flex', justifyContent: 'flex-start', width: '100%' }}>
+  //     <Paper
+  //       elevation={0}
+  //       sx={(theme) => ({
+  //         maxWidth: '90%',
+  //         px: 1.25,
+  //         py: 1,
+  //         borderRadius: '14px',
+  //         borderTopLeftRadius: theme.spacing(1.5),
+  //         borderBottomRightRadius: theme.spacing(1.5),
+  //         backgroundColor: theme.palette.grey[100],
+  //         color: theme.palette.text.secondary,
+  //         boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+  //       })}
+  //     >
+  //       {caption ? (
+  //         <Typography
+  //           variant="caption"
+  //           sx={{ display: 'block', fontWeight: 600, opacity: 0.75, mb: 0.25, letterSpacing: '0.02em' }}
+  //         >
+  //           {caption}
+  //         </Typography>
+  //       ) : null}
+  //       <Typography
+  //         variant="body2"
+  //         component="div"
+  //         sx={{
+  //           whiteSpace: 'pre-wrap',
+  //           wordBreak: 'break-word',
+  //           fontSize: '0.8125rem',
+  //           lineHeight: 1.45,
+  //         }}
+  //       >
+  //         {body || '\u00a0'}
+  //       </Typography>
+  //     </Paper>
+  //   </Box>
+  // );
+  return null;
 }
 
 export const ChainOfThoughtModal: React.FC<ChainOfThoughtModalProps> = ({
@@ -86,77 +104,78 @@ export const ChainOfThoughtModal: React.FC<ChainOfThoughtModalProps> = ({
   title = 'Chain of thought',
   content,
 }) => {
-  const segments = useMemo(() => {
-    if (content.mode === 'plain') {
-      const t = sanitizeDisplayText(content.text || '').trim();
-      return t ? [{ kind: 'reasoning' as const, text: t }] : [];
-    }
-    return thoughtItemsToModalSegments(content.thoughtItems, content.proseReasoning);
-  }, [content]);
+  // const segments = useMemo(() => {
+  //   if (content.mode === 'plain') {
+  //     const t = sanitizeDisplayText(content.text || '').trim();
+  //     return t ? [{ kind: 'reasoning' as const, text: t }] : [];
+  //   }
+  //   return thoughtItemsToModalSegments(content.thoughtItems, content.proseReasoning);
+  // }, [content]);
 
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      fullWidth
-      maxWidth="sm"
-      scroll="paper"
-      aria-labelledby="chain-of-thought-dialog-title"
-      PaperProps={{
-        sx: {
-          borderRadius: 2,
-          maxHeight: 'min(85dvh, 560px)',
-          m: 2,
-          width: '100%',
-        },
-      }}
-    >
-      <DialogTitle
-        id="chain-of-thought-dialog-title"
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 1,
-          pr: 1,
-          py: 1.5,
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Typography component="span" variant="subtitle1" fontWeight="bold">
-          {title}
-        </Typography>
-        <IconButton
-          aria-label="Close chain of thought"
-          onClick={onClose}
-          size="small"
-          edge="end"
-        >
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </DialogTitle>
-      <DialogContent
-        sx={{
-          pt: 2,
-          pb: 'calc(16px + env(safe-area-inset-bottom, 0px))',
-          overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 1.25,
-          alignItems: 'stretch',
-        }}
-      >
-        {segments.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            Awaiting task…
-          </Typography>
-        ) : (
-          segments.map((segment, index) => (
-            <ThoughtSegmentBubble key={`${segment.kind}-${index}-${segment.text.slice(0, 24)}`} segment={segment} />
-          ))
-        )}
-      </DialogContent>
-    </Dialog>
-  );
+  // return (
+  //   <Dialog
+  //     open={open}
+  //     onClose={onClose}
+  //     fullWidth
+  //     maxWidth="sm"
+  //     scroll="paper"
+  //     aria-labelledby="chain-of-thought-dialog-title"
+  //     PaperProps={{
+  //       sx: {
+  //         borderRadius: 2,
+  //         maxHeight: 'min(85dvh, 560px)',
+  //         m: 2,
+  //         width: '100%',
+  //       },
+  //     }}
+  //   >
+  //     <DialogTitle
+  //       id="chain-of-thought-dialog-title"
+  //       sx={{
+  //         display: 'flex',
+  //         alignItems: 'center',
+  //         justifyContent: 'space-between',
+  //         gap: 1,
+  //         pr: 1,
+  //         py: 1.5,
+  //         borderBottom: 1,
+  //         borderColor: 'divider',
+  //       }}
+  //     >
+  //       <Typography component="span" variant="subtitle1" fontWeight="bold">
+  //         {title}
+  //       </Typography>
+  //       <IconButton
+  //         aria-label="Close chain of thought"
+  //         onClick={onClose}
+  //         size="small"
+  //         edge="end"
+  //       >
+  //         <CloseIcon fontSize="small" />
+  //       </IconButton>
+  //     </DialogTitle>
+  //     <DialogContent
+  //       sx={{
+  //         pt: 2,
+  //         pb: 'calc(16px + env(safe-area-inset-bottom, 0px))',
+  //         overflowY: 'auto',
+  //         display: 'flex',
+  //         flexDirection: 'column',
+  //         gap: 1.25,
+  //         alignItems: 'stretch',
+  //       }}
+  //     >
+  //       {segments.length === 0 ? (
+  //         <Typography variant="body2" color="text.secondary">
+  //           Awaiting task…
+  //         </Typography>
+  //       ) : (
+  //         segments.map((segment: ThoughtProcessModalSegment, index: number) => (
+  //           <ThoughtSegmentBubble key={`${segment.kind}-${index}-${segment.text.slice(0, 24)}`} segment={segment} />
+  //         ))
+  //       )}
+  //     </DialogContent>
+  //   </Dialog>
+  // );
+  return null;
 };

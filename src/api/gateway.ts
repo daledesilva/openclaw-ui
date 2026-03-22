@@ -5,9 +5,10 @@ import {
 } from './device-auth';
 import { VITE_APP_VERSION_FULL } from '../appVersion';
 import {
+  type AssistantDisplayPayload,
   type ChatHistoryResponse,
   type FetchedChatMessage,
-  type RawHistoryMessage,
+  type RawHistoryItem,
   extractStreamText,
   mapRawHistoryMessage,
   parseAssistantDisplayPayload,
@@ -34,6 +35,18 @@ export interface ChatDeltaInfo {
   /** Collapsed label for the last `toolCall` part in this delta, if any. */
   lastToolSummary: string | null;
 }
+
+/**
+ * Normalized stream lifecycle for the chat transcript (reasoning, deltas, body text, final, terminal).
+ * Delivered via {@link initGatewayConnection}`s `onEvent` so the UI can forward to a single handler (e.g. transcript hook).
+ */
+export type GatewayStreamEvent =
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'chatDelta'; runId?: string; seq?: number; lastToolSummary: string | null }
+  | { kind: 'agentStreamToolHint'; label: string }
+  | { kind: 'content'; text: string }
+  | { kind: 'assistantFinal'; payload: AssistantDisplayPayload }
+  | { kind: 'chatTerminal'; state: 'final' | 'aborted' | 'error'; errorMessage?: string; runId?: string };
 
 function logOutbound(obj: unknown, redactToken = false) {
   const safe = redactToken && typeof obj === 'object' && obj !== null && 'params' in obj
@@ -62,15 +75,9 @@ let socket: WebSocket | null = null;
 /** When set, `chat` events whose `payload.sessionKey` differs are ignored (multi-thread UI). */
 let getActiveChatSessionKeyForChatRouting: (() => string | undefined) | null = null;
 let onMessageCallback: ((message: unknown) => void) | null = null;
-let onReasoningCallback: ((chunk: string) => void) | null = null;
-let onContentCallback: ((chunk: string) => void) | null = null;
+let onStreamEventCallback: ((event: GatewayStreamEvent) => void) | null = null;
 let onConnectedCallback: (() => void) | null = null;
 let onConnectErrorCallback: ((error: string) => void) | null = null;
-let onAssistantFinalCallback: ((payload: ReturnType<typeof parseAssistantDisplayPayload>) => void) | null =
-  null;
-let onChatDeltaCallback: ((info: ChatDeltaInfo) => void) | null = null;
-let onChatTerminalCallback: ((info: ChatTerminalInfo) => void) | null = null;
-let onAgentStreamToolHintCallback: ((label: string) => void) | null = null;
 let onDisconnectedCallback: (() => void) | null = null;
 /** True after a successful `connect` res; cleared on socket close. Used to detect mid-session drops. */
 let gatewayHandshakeOk = false;
@@ -347,11 +354,11 @@ function connect() {
       if (ev?.startsWith('agent') || ev?.includes('stream')) {
         const p = (data as { payload?: { stream?: string; data?: unknown } }).payload;
         if (p?.stream === 'reasoning' && p?.data && typeof (p.data as Record<string, unknown>).text === 'string') {
-          onReasoningCallback?.((p.data as { text: string }).text);
+          onStreamEventCallback?.({ kind: 'reasoning', text: (p.data as { text: string }).text });
         }
         const toolLabel = p?.data ? toolHintFromAgentStreamData(p.data) : null;
         if (toolLabel) {
-          onAgentStreamToolHintCallback?.(toolLabel);
+          onStreamEventCallback?.({ kind: 'agentStreamToolHint', label: toolLabel });
         }
       } else if (ev && !ROUTINE_EVENTS.has(ev)) {
         logUnhandled(data);
@@ -423,14 +430,14 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
 
   if (state === 'delta') {
     const lastToolSummary = lastToolSummaryFromStreamMessage(message);
-    onChatDeltaCallback?.({ runId, seq, lastToolSummary });
+    onStreamEventCallback?.({ kind: 'chatDelta', runId, seq, lastToolSummary });
   }
 
   if (state === 'delta' || state === 'final') {
     if (message !== undefined && message !== null) {
       const text = extractStreamText(message);
       if (text) {
-        onContentCallback?.(text);
+        onStreamEventCallback?.({ kind: 'content', text });
       } else if (DEBUG && typeof message === 'object' && message !== null) {
         console.log(`${LOG} chat message shape:`, JSON.stringify(message, null, 2));
       }
@@ -438,19 +445,20 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
   }
 
   if (state === 'final' && message !== undefined && message !== null) {
-    onAssistantFinalCallback?.(
-      parseAssistantDisplayPayload(message, {
+    onStreamEventCallback?.({
+      kind: 'assistantFinal',
+      payload: parseAssistantDisplayPayload(message, {
         errorMessage,
         role: 'assistant',
-      })
-    );
+      }),
+    });
   }
 
   if (state === 'final' || state === 'aborted' || state === 'error') {
     if (errorMessage) {
       console.error(`${LOG} chat ${state}:`, errorMessage);
     }
-    onChatTerminalCallback?.({ state, errorMessage, runId });
+    onStreamEventCallback?.({ kind: 'chatTerminal', state, errorMessage, runId });
   }
 }
 
@@ -492,12 +500,12 @@ export function sendMessageToGateway(message: string) {
 
 export function fetchChatHistory(limit = 100, sessionKeyOverride?: string): Promise<FetchedChatMessage[]> {
   const key = sessionKeyOverride?.trim() || sessionKey();
-  return sendReq<ChatHistoryResponse | RawHistoryMessage[]>('chat.history', {
+  return sendReq<ChatHistoryResponse | RawHistoryItem[]>('chat.history', {
     sessionKey: key,
     limit,
   }).then((res) => {
     const list = Array.isArray(res) ? res : (res?.messages ?? []);
-    return (list as RawHistoryMessage[]).map((m) => mapRawHistoryMessage(m));
+    return (list as RawHistoryItem[]).map((m) => mapRawHistoryMessage(m));
   });
 }
 
@@ -533,27 +541,15 @@ export function requestGatewayReconnect(): void {
 
 export function initGatewayConnection({
   onMessage,
-  onReasoning,
-  onContent,
-  onAssistantFinal,
-  onChatDelta,
-  onChatTerminal,
-  onAgentStreamToolHint,
+  onEvent,
   onConnected,
   onConnectError,
   onDisconnected,
   getActiveChatSessionKey,
 }: {
   onMessage: (message: unknown) => void;
-  onReasoning: (chunk: string) => void;
-  onContent: (chunk: string) => void;
-  onAssistantFinal?: (payload: ReturnType<typeof parseAssistantDisplayPayload>) => void;
-  /** Each `chat` event with `state: 'delta'` (before `onContent` when text is extracted). */
-  onChatDelta?: (info: ChatDeltaInfo) => void;
-  /** After `final` / `aborted` / `error` (after `onAssistantFinal` when `state === 'final'`). */
-  onChatTerminal?: (info: ChatTerminalInfo) => void;
-  /** When agent/stream events carry a tool-shaped payload but chat deltas omit tools (gateway-dependent). */
-  onAgentStreamToolHint?: (label: string) => void;
+  /** Reasoning stream, chat deltas, content chunks, assistant final, and chat terminal (one discriminated union). */
+  onEvent: (event: GatewayStreamEvent) => void;
   onConnected?: () => void;
   onConnectError?: (error: string) => void;
   /** Socket closed after a successful handshake (not a deliberate `disconnectGateway` / client close). */
@@ -566,12 +562,7 @@ export function initGatewayConnection({
 }) {
   getActiveChatSessionKeyForChatRouting = getActiveChatSessionKey ?? null;
   onMessageCallback = onMessage;
-  onReasoningCallback = onReasoning;
-  onContentCallback = onContent;
-  onAssistantFinalCallback = onAssistantFinal ?? null;
-  onChatDeltaCallback = onChatDelta ?? null;
-  onChatTerminalCallback = onChatTerminal ?? null;
-  onAgentStreamToolHintCallback = onAgentStreamToolHint ?? null;
+  onStreamEventCallback = onEvent;
   onConnectedCallback = onConnected ?? null;
   onConnectErrorCallback = onConnectError ?? null;
   onDisconnectedCallback = onDisconnected ?? null;

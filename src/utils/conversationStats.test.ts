@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { Message } from '../chatThreadTypes';
+import type { ChatMessage } from '../chatThreadTypes';
 import { computeThreadConversationStats, computeThreadMessageCount } from './conversationStats';
 
 describe('computeThreadConversationStats', () => {
   it('counts messages and sums content length', () => {
-    const messages: Message[] = [
+    const messages: ChatMessage[] = [
       { id: '1', role: 'user', content: 'hello' },
       { id: '2', role: 'ai', kind: 'assistant', content: 'world' },
     ];
@@ -15,7 +15,7 @@ describe('computeThreadConversationStats', () => {
   });
 
   it('includes reasoning and reasoningTrace text', () => {
-    const messages: Message[] = [
+    const messages: ChatMessage[] = [
       {
         id: '1',
         role: 'ai',
@@ -31,7 +31,7 @@ describe('computeThreadConversationStats', () => {
   });
 
   it('omits trailing empty assistant row when requested', () => {
-    const messages: Message[] = [
+    const messages: ChatMessage[] = [
       { id: '1', role: 'user', content: 'hi' },
       { id: '2', role: 'ai', kind: 'assistant', content: '' },
     ];
@@ -43,7 +43,7 @@ describe('computeThreadConversationStats', () => {
 
 describe('computeThreadMessageCount', () => {
   it('matches messageCount from computeThreadConversationStats', () => {
-    const messages: Message[] = [
+    const messages: ChatMessage[] = [
       { id: '1', role: 'user', content: 'hello' },
       { id: '2', role: 'ai', kind: 'assistant', content: 'world' },
     ];

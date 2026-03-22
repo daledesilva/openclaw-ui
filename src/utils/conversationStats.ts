@@ -1,28 +1,27 @@
-import type { Message } from '../chatThreadTypes';
+import type { ChatMessage } from '../chatThreadTypes';
 
-function approxTextCharactersFromMessage(message: Message): number {
-  let n = message.content.length;
-  if (message.reasoning?.trim()) {
-    n += message.reasoning.length;
-  }
-  if (message.kind === 'reasoningTrace') {
-    if (message.proseReasoning?.trim()) {
-      n += message.proseReasoning.length;
-    }
-    for (const item of message.thoughtItems ?? []) {
-      if (item.kind === 'reasoningChunk') n += item.text.length;
-      else if (item.kind === 'toolHint') n += item.label.length;
-      else if (item.kind === 'toolResult') n += item.summary.length;
+function messageContentLength(message: ChatMessage): number {
+  return typeof message.content === 'string' ? message.content.length : String(message.content ?? '').length;
+}
+
+function approxTextCharactersFromMessage(message: ChatMessage): number {
+  let n = messageContentLength(message);
+  for (const item of message.thoughtItems ?? []) {
+    if (item.kind === 'internalMonologue') n += item.thought.length;
+    else if (item.kind === 'toolCall') {
+      n += String(item.content ?? '').length;
+      const tn = item.toolName ?? '';
+      if (tn) n += tn.length;
     }
   }
   return n;
 }
 
-function isTrailingEmptyAssistantPlaceholder(message: Message): boolean {
+function isTrailingEmptyAssistantPlaceholder(message: ChatMessage): boolean {
+  const contentStr = typeof message.content === 'string' ? message.content : String(message.content ?? '');
   return (
-    message.role === 'ai' &&
-    (!message.kind || message.kind === 'assistant') &&
-    !message.content.trim() &&
+    (message.role === 'ai' || message.role === 'assistant') &&
+    !contentStr.trim() &&
     !message.isError
   );
 }
@@ -32,7 +31,7 @@ function isTrailingEmptyAssistantPlaceholder(message: Message): boolean {
  * Intended as a loose proxy for context size, not token usage.
  */
 export function computeThreadConversationStats(
-  messages: Message[],
+  messages: ChatMessage[],
   options?: { omitTrailingEmptyAssistantPlaceholder?: boolean }
 ): { messageCount: number; textCharacterCount: number } {
   let rows = messages;
@@ -52,7 +51,7 @@ export function computeThreadConversationStats(
 
 /** Message row count only (same trailing empty-assistant rule as {@link computeThreadConversationStats}). */
 export function computeThreadMessageCount(
-  messages: Message[],
+  messages: ChatMessage[],
   options?: { omitTrailingEmptyAssistantPlaceholder?: boolean }
 ): number {
   return computeThreadConversationStats(messages, options).messageCount;

@@ -163,7 +163,7 @@ export function bodyWithToolSummary(parsed: ParsedContentParts): string {
   return `${body}\n\n${toolsBlock}`;
 }
 
-export interface RawHistoryMessage {
+export interface RawHistoryItem {
   role?: string;
   content?: unknown;
   timestamp?: number;
@@ -182,29 +182,10 @@ export interface RawHistoryMessage {
   isError?: boolean;
 }
 
-/** Normalized row for UI after chat.history */
-export interface FetchedChatMessage {
-  role: string;
-  content: string;
-  reasoning: string;
-  senderLabel?: string;
-  timestamp?: number;
-  isError?: boolean;
-  toolCalls?: ToolCallEntry[];
-  /** Present for `toolresult` rows */
-  toolName?: string;
-  /** Original gateway `content` for tool results (pretty-print when expanded) */
-  toolRawPayload?: unknown;
-  /** Client estimate from Vertex-style $/1M table (Google models only) */
-  estimatedCostUsd?: number;
-  modelRef?: string;
-  provider?: string;
-}
-
 export interface ChatHistoryResponse {
   sessionKey?: string;
   sessionId?: string;
-  messages?: RawHistoryMessage[];
+  messages?: RawHistoryItem[];
 }
 
 export interface AssistantDisplayPayload {
@@ -218,7 +199,7 @@ export interface AssistantDisplayPayload {
 export function assistantDisplayBody(
   role: string,
   parsed: ParsedContentParts,
-  raw: Pick<RawHistoryMessage, 'errorMessage' | 'stopReason' | 'model'>,
+  raw: Pick<RawHistoryItem, 'errorMessage' | 'stopReason' | 'model'>,
   options?: { omitToolSummary?: boolean }
 ): string {
   const base = options?.omitToolSummary
@@ -240,7 +221,7 @@ export function assistantDisplayBody(
   return meta ? `${friendly}\n\n(${meta})` : friendly;
 }
 
-export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
+export function mapRawHistoryMessage(m: RawHistoryItem) {
   const role = (m.role ?? 'user').toLowerCase();
 
   if (role === 'toolresult') {
@@ -290,17 +271,19 @@ export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
   };
 }
 
+export type FetchedChatMessage = ReturnType<typeof mapRawHistoryMessage>;
+
 /**
  * Normalized assistant payload for final chat events and history alignment.
  */
 export function parseAssistantDisplayPayload(
   message: unknown,
-  raw?: Pick<RawHistoryMessage, 'errorMessage' | 'stopReason' | 'model' | 'provider' | 'usage'> & {
+  raw?: Pick<RawHistoryItem, 'errorMessage' | 'stopReason' | 'model' | 'provider' | 'usage'> & {
     role?: string;
   }
 ): AssistantDisplayPayload {
   const role = (raw?.role ?? 'assistant').toLowerCase();
-  const mergedRaw: Pick<RawHistoryMessage, 'errorMessage' | 'stopReason' | 'model' | 'provider' | 'usage'> & {
+  const mergedRaw: Pick<RawHistoryItem, 'errorMessage' | 'stopReason' | 'model' | 'provider' | 'usage'> & {
     role?: string;
   } = { ...raw };
   if (isRecord(message)) {

@@ -3,7 +3,7 @@ import { Box, CircularProgress, Link } from '@mui/material';
 import type { SxProps, Theme } from '@mui/material/styles';
 import type { ChainOfThoughtModalContent } from './ChainOfThoughtModal';
 import type { ThoughtItem } from '../chatThreadTypes';
-import { deriveLastToolSummaryLine } from '../utils/recentThoughtsReducer';
+import { deriveRecentToolSummaryLine } from '../utils/thoughtProcessing';
 import { sanitizeDisplayText } from '../utils/sanitizeDisplayText';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ChatBubblePaper } from './atoms/ChatBubblePaper';
@@ -23,7 +23,7 @@ export function AgentChatBubble(props: AgentChatBubbleProps): React.ReactNode {
   let message = '';
   if(props.messageText) {
     isThinking = false;
-    message = sanitizeDisplayText(props.messageText || deriveLastToolSummaryLine(props.thoughtItems) || '');
+    message = sanitizeDisplayText(props.messageText || deriveRecentToolSummaryLine(props.thoughtItems) || '');
   }
 
   return (
