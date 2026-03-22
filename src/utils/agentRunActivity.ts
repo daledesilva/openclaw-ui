@@ -26,8 +26,8 @@ export function nextActivityFromContentChunk(current: AgentRunActivity): AgentRu
 }
 
 /**
- * Body text for the in-flight phase bubble (spinner always shown separately).
- * `responding` is omitted here — the phase bubble is not rendered while the answer streams.
+ * Body text for the in-flight assistant slot when the answer is not shown yet (spinner is separate in `ChatBubble`).
+ * `responding` is omitted here — phase fallback is not used once answer chunks drive activity to `responding`.
  */
 export function phaseBubbleDisplayText(
   activity: AgentRunActivity,

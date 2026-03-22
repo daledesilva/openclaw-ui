@@ -12,6 +12,17 @@ export function appendThoughtItem(thoughts: ThoughtItem[], item: ThoughtItem): T
   return [...thoughts, item];
 }
 
+/** True when opening the chain-of-thought modal would have structured or prose content. */
+export function traceHasDisplayableContent(
+  thoughtItems: ThoughtItem[],
+  proseReasoning: string | undefined,
+  hasOpenHandler: boolean
+): boolean {
+  if (!hasOpenHandler) return false;
+  if (proseReasoning?.trim()) return true;
+  return thoughtItems.length > 0;
+}
+
 export function findLastAssistantIndex(messages: Message[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;

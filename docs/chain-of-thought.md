@@ -7,10 +7,10 @@ The gateway can stream model **reasoning** separately from the main answer, and 
 ## Conceptual model
 
 - **`recentThoughts` buffer (live):** While a run is in progress, `App.tsx` appends **non-answer** signals to a ref-backed list (`ThoughtItem[]`): reasoning stream chunks (`onReasoning`), tool labels from `onChatDelta` / `onAgentStreamToolHint`, and (on history replay) tool results. **Answer body text** still streams only via `onContent` into the last assistant bubble.
-- **Flush on final:** When `onAssistantFinal` fires, if the buffer is non-empty **or** the final payload carries **prose reasoning** (`parseAssistantDisplayPayload` thinking), the UI inserts a **`reasoningTrace`** message **immediately above** the streaming assistant slot, then merges the final display payload into that assistant bubble. The buffer is cleared (and again on `aborted` / `error` / disconnect / new send).
-- **Live overflow:** `activeReasoning` still mirrors streamed reasoning for the in-run phase bubble; completed turns expose the same structured data via the **`reasoningTrace`** row (**View Thought Process** → modal). Opening the modal while a run is in flight prefers a **snapshot** of `recentThoughtsRef` when non-empty, otherwise plain `activeReasoning`.
+- **Flush on final:** When `onAssistantFinal` fires, if the buffer is non-empty **or** the final payload carries **prose reasoning** (`parseAssistantDisplayPayload` thinking), the UI still inserts a **`reasoningTrace`** message **immediately before** the streaming assistant slot in state, then merges the final display payload into that assistant bubble. The buffer is cleared (and again on `aborted` / `error` / disconnect / new send). **Rendering** pairs that trace with the following assistant row: one [`ChatBubble`](src/components/ChatBubble.tsx) shows the answer and a small top-left **View Thought Process** control wired to the trace payload (no separate grey trace row).
+- **Live overflow:** `activeReasoning` mirrors streamed reasoning for the in-run assistant slot; while the run is active, the same bubble can show a spinner and phase line (`phaseBubbleDisplayText`) until answer text or media wins. **View Thought Process** appears when [`traceHasDisplayableContent`](src/utils/recentThoughtsReducer.ts) is true for `recentThoughtsRef` + `activeReasoning`. Opening the modal prefers a **snapshot** of `recentThoughtsRef` when non-empty, otherwise plain `activeReasoning`.
 - **Gateway `thinking` vs UI `reasoning`:** Raw history uses content parts with `type: "thinking"`. [`parseContentParts`](src/api/gateway-types.ts) aggregates those into a string field named **`reasoning`** on [`FetchedChatMessage`](src/api/gateway-types.ts) and on live `parseAssistantDisplayPayload` output. That rename is UI-side normalization, not a second gateway event type.
-- **History fold:** [`foldFetchedHistoryToMessages`](src/utils/recentThoughtsReducer.ts) walks `chat.history` in order. For each assistant row it appends tool hints, tool results (from prior `toolresult` rows), and **`reasoning`** text as **`reasoningChunk`** items into one buffer. It emits a **`reasoningTrace`** **only immediately before** an assistant row that **displays to the user**—non-empty body text, link previews, images, or an error ([`assistantHistoryRowDisplaysToUser`](src/utils/recentThoughtsReducer.ts)). Thinking-only or tool-only assistant rows do **not** flush by themselves (avoids double trace bubbles). If the transcript ends with a non-empty buffer and no such row, a final orphan **`reasoningTrace`** is emitted. **`toolresult`** rows only extend the buffer (no separate tool bubbles in the main thread).
+- **History fold:** [`foldFetchedHistoryToMessages`](src/utils/recentThoughtsReducer.ts) walks `chat.history` in order. For each assistant row it appends tool hints, tool results (from prior `toolresult` rows), and **`reasoning`** text as **`reasoningChunk`** items into one buffer. It emits a **`reasoningTrace`** **only immediately before** an assistant row that **displays to the user**—non-empty body text, link previews, images, or an error ([`assistantHistoryRowDisplaysToUser`](src/utils/recentThoughtsReducer.ts)). Thinking-only or tool-only assistant rows do **not** flush by themselves (avoids double trace bubbles). If the transcript ends with a non-empty buffer and no such row, a final orphan **`reasoningTrace`** is emitted (rendered as an assistant-style bubble with only **View Thought Process**). **`toolresult`** rows only extend the buffer (no separate tool bubbles in the main thread).
 
 ## Flow
 
@@ -36,25 +36,28 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-  subgraph thread [Main thread]
-    TraceRow[reasoningTrace row]
-    TraceRow --> Btn[View Thought Process]
+  subgraph thread [Main thread one assistant bubble]
+    Bubble[ChatBubble]
+    Header[View Thought Process]
+    Body[Answer or phase line plus optional spinner]
+    Bubble --> Header
+    Bubble --> Body
   end
-  Btn --> Modal[ChainOfThoughtModal]
+  Header --> Modal[ChainOfThoughtModal]
   Modal --> Bubbles[Scrollable gray bubbles per tool result thought summary]
 ```
 
 ## Technical details
 
 - **Types:** `src/chatThreadTypes.ts` — `Message`, `ThoughtItem`, `kind: 'reasoningTrace'`.
-- **Reducer:** `src/utils/recentThoughtsReducer.ts` — `appendThoughtItem` (dedupes consecutive identical tool hints), `assistantHistoryRowDisplaysToUser`, `applyAssistantFinalWithThoughtBuffer`, `foldFetchedHistoryToMessages`, `formatThoughtItemsForModal` (string export / tests), `thoughtItemsToModalSegments` (merges adjacent `reasoningChunk` for modal rows), `findLastHistoricalChainOfThought` (tests / helpers for historical trace detection).
-- **Inline UI:** `src/components/ReasoningTraceBubble.tsx` — **View Thought Process** only; no inline tool or thinking text.
+- **Reducer:** `src/utils/recentThoughtsReducer.ts` — `appendThoughtItem` (dedupes consecutive identical tool hints), `traceHasDisplayableContent`, `assistantHistoryRowDisplaysToUser`, `applyAssistantFinalWithThoughtBuffer`, `foldFetchedHistoryToMessages`, `formatThoughtItemsForModal` (string export / tests), `thoughtItemsToModalSegments` (merges adjacent `reasoningChunk` for modal rows), `findLastHistoricalChainOfThought` (tests / helpers for historical trace detection).
+- **Inline UI:** `src/components/ChatBubble.tsx` — assistant chrome with optional **View Thought Process** header (caption-sized), optional `phaseFallbackText` + `isThinking` for the in-run slot, body prioritising streamed answer over phase text.
 - **Modal:** `src/components/ChainOfThoughtModal.tsx` — `content` is either `{ mode: 'structured', thoughtItems, proseReasoning? }` or `{ mode: 'plain', text }` (legacy assistant `reasoning`). Renders `ThoughtProcessModalSegment` rows as small gray bubbles; `sanitizeDisplayText` on each segment body.
-- **Triggers:** Trace row **View Thought Process**; in-run phase bubble (`phaseBubbleDisplayText` — see [Agent run phase](agent-run-phase.md)); assistant **View reasoning** when `Message.reasoning` is set on older rows.
+- **Triggers:** **View Thought Process** on the assistant bubble (paired `reasoningTrace` data, live buffer, or legacy `Message.reasoning`).
 
 ## Technical gotchas
 
 - **`onAssistantFinal` and `onChatTerminal`** may run in the same tick; the buffer is cleared inside the `setMessages` callback for final, then again on terminal — idempotent.
-- **Prose-only final:** If the buffer is empty but `payload.reasoning` is non-empty, a trace bubble is still inserted (the button still opens modal content that includes that prose segment).
+- **Prose-only final:** If the buffer is empty but `payload.reasoning` is non-empty, a trace message is still inserted (the control still opens modal content that includes that prose segment).
 - **Modal + mobile:** Dialog content uses bottom padding with `env(safe-area-inset-bottom)`; hard refresh if a service worker serves a stale bundle.
-- **Tools-only live buffer:** If tools stream before any reasoning text, `activeReasoning` may still be empty while `recentThoughtsRef` is not; the phase bubble still opens structured content from the ref.
+- **Tools-only live buffer:** If tools stream before any reasoning text, `activeReasoning` may still be empty while `recentThoughtsRef` is not; **View Thought Process** still opens structured content from the ref when the predicate passes.

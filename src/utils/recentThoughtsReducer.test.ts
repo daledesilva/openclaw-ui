@@ -11,6 +11,7 @@ import {
   findLastHistoricalChainOfThought,
   mergeAssistantFinalIntoMessages,
   thoughtItemsToModalSegments,
+  traceHasDisplayableContent,
   withReasoningTraceBeforeLastAssistant,
 } from './recentThoughtsReducer';
 
@@ -26,6 +27,24 @@ describe('appendThoughtItem', () => {
     t = appendThoughtItem(t, { kind: 'reasoningChunk', text: 'x' });
     t = appendThoughtItem(t, { kind: 'toolHint', label: 'a' });
     expect(t).toHaveLength(3);
+  });
+});
+
+describe('traceHasDisplayableContent', () => {
+  it('is false without handler', () => {
+    expect(traceHasDisplayableContent([{ kind: 'toolHint', label: 'x' }], 'p', false)).toBe(false);
+  });
+  it('is true with prose only', () => {
+    expect(traceHasDisplayableContent([], '  hi  ', true)).toBe(true);
+  });
+  it('is true with thought items only', () => {
+    expect(traceHasDisplayableContent([{ kind: 'toolHint', label: 'read()' }], undefined, true)).toBe(
+      true
+    );
+  });
+  it('is false when empty and no prose', () => {
+    expect(traceHasDisplayableContent([], '', true)).toBe(false);
+    expect(traceHasDisplayableContent([], undefined, true)).toBe(false);
   });
 });
 

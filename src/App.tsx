@@ -19,7 +19,6 @@ import {
 import AddCommentIcon from '@mui/icons-material/AddComment';
 import MenuIcon from '@mui/icons-material/Menu';
 import { ChatBubble } from './components/ChatBubble';
-import { ReasoningTraceBubble } from './components/ReasoningTraceBubble';
 import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtModal, type ChainOfThoughtModalContent } from './components/ChainOfThoughtModal';
 import { GoogleGeminiPricingModal } from './components/GoogleGeminiPricingModal';
@@ -29,6 +28,7 @@ import {
   appendThoughtItem,
   applyAssistantFinalWithThoughtBuffer,
   foldFetchedHistoryToMessages,
+  traceHasDisplayableContent,
 } from './utils/recentThoughtsReducer';
 import {
   initGatewayConnection,
@@ -161,9 +161,9 @@ export default function App() {
   const activeMessageCount = useMemo(
     () =>
       computeThreadMessageCount(messages, {
-        omitTrailingEmptyAssistantPlaceholder: isAgentRunBlockingInput(agentActivity),
+        omitTrailingEmptyAssistantPlaceholder: false,
       }),
-    [messages, agentActivity]
+    [messages]
   );
 
   const sessionGeminiEstimateUsd = useMemo(() => sumMessageEstimatedUsd(messages), [messages]);
@@ -435,6 +435,16 @@ export default function App() {
       disconnectGateway();
     };
   }, [tokenReady, syncStateFromFetchedHistory, scheduleRefreshGatewaySessionTokens]);
+
+  const openLiveThoughtModal = useCallback(() => {
+    const refSnapshot = [...recentThoughtsRef.current];
+    if (refSnapshot.length > 0) {
+      setCotModalPayload({ mode: 'structured', thoughtItems: refSnapshot });
+    } else {
+      setCotModalPayload({ mode: 'plain', text: activeReasoning });
+    }
+    setCotOpen(true);
+  }, [activeReasoning]);
 
   if (!tokenReady) {
     return <TokenSetupScreen onTokenSet={() => setTokenReady(true)} />;
@@ -888,12 +898,21 @@ export default function App() {
         >
           {messages.map((msg, index) => {
             if (msg.role === 'ai' && msg.kind === 'reasoningTrace') {
+              const nextMsg = messages[index + 1];
+              const consumedByFollowingAssistant =
+                nextMsg &&
+                nextMsg.role === 'ai' &&
+                (!nextMsg.kind || nextMsg.kind === 'assistant');
+              if (consumedByFollowingAssistant) {
+                return null;
+              }
               return (
-                <ReasoningTraceBubble
+                <ChatBubble
                   key={msg.id}
-                  thoughtItems={msg.thoughtItems ?? []}
-                  proseReasoning={msg.proseReasoning}
-                  onViewFullReasoning={() => {
+                  role="ai"
+                  content=""
+                  hideEmptyBodyPlaceholder
+                  onViewReasoning={() => {
                     setCotModalPayload({
                       mode: 'structured',
                       thoughtItems: msg.thoughtItems ?? [],
@@ -904,27 +923,78 @@ export default function App() {
                 />
               );
             }
+
             const isLastMessage = index === messages.length - 1;
             const runInFlight = agentActivity !== 'idle';
+            const isAssistantSlot =
+              msg.role === 'ai' && (!msg.kind || msg.kind === 'assistant');
             const isEmptyStreamingAssistantSlot =
-              msg.role === 'ai' &&
-              (!msg.kind || msg.kind === 'assistant') &&
+              isAssistantSlot &&
               !msg.content.trim() &&
               !(msg.imageUrls?.length) &&
               !(msg.linkPreviews?.length) &&
               !msg.isError;
-            if (isEmptyStreamingAssistantSlot && isLastMessage && runInFlight) {
-              return null;
-            }
-            const viewReasoningHandler =
-              msg.role === 'ai' &&
-              (!msg.kind || msg.kind === 'assistant') &&
-              msg.reasoning?.trim()
+
+            const prevMsg = index > 0 ? messages[index - 1] : undefined;
+            const pairedTrace =
+              prevMsg?.role === 'ai' && prevMsg.kind === 'reasoningTrace' ? prevMsg : undefined;
+
+            const onViewReasoningFromTrace = pairedTrace
+              ? () => {
+                  setCotModalPayload({
+                    mode: 'structured',
+                    thoughtItems: pairedTrace.thoughtItems ?? [],
+                    ...(pairedTrace.proseReasoning?.trim()
+                      ? { proseReasoning: pairedTrace.proseReasoning }
+                      : {}),
+                  });
+                  setCotOpen(true);
+                }
+              : undefined;
+
+            const onViewReasoningFromLegacy =
+              isAssistantSlot && msg.reasoning?.trim()
                 ? () => {
                     setCotModalPayload({ mode: 'plain', text: sanitizeDisplayText(msg.reasoning!) });
                     setCotOpen(true);
                   }
                 : undefined;
+
+            const canOpenLiveCoT = traceHasDisplayableContent(
+              recentThoughtsRef.current,
+              activeReasoning || undefined,
+              true
+            );
+            const liveCoTWhenInFlight =
+              isAssistantSlot && isLastMessage && runInFlight && canOpenLiveCoT
+                ? openLiveThoughtModal
+                : undefined;
+
+            const viewReasoningHandler =
+              onViewReasoningFromTrace ?? onViewReasoningFromLegacy ?? liveCoTWhenInFlight;
+
+            if (isEmptyStreamingAssistantSlot && isLastMessage && runInFlight) {
+              const phaseText = phaseBubbleDisplayText(
+                agentActivity,
+                lastReasoningLine,
+                liveLastToolSummary
+              );
+              return (
+                <ChatBubble
+                  key={msg.id}
+                  role="ai"
+                  content={msg.content}
+                  imageUrls={msg.imageUrls}
+                  linkPreviews={msg.linkPreviews}
+                  isError={msg.isError}
+                  isThinking={agentActivity !== 'responding'}
+                  streamPhase={agentActivity as StreamPhaseStyle}
+                  phaseFallbackText={phaseText}
+                  onViewReasoning={canOpenLiveCoT ? openLiveThoughtModal : undefined}
+                />
+              );
+            }
+
             return (
               <ChatBubble
                 key={msg.id}
@@ -934,27 +1004,10 @@ export default function App() {
                 linkPreviews={msg.linkPreviews}
                 caption={msg.role === 'user' ? msg.senderLabel : undefined}
                 isError={msg.role === 'ai' ? msg.isError : undefined}
-                onViewReasoning={viewReasoningHandler}
+                onViewReasoning={isAssistantSlot ? viewReasoningHandler : undefined}
               />
             );
           })}
-          {agentActivity !== 'idle' && agentActivity !== 'responding' && (
-            <ChatBubble
-              role="ai"
-              content={phaseBubbleDisplayText(agentActivity, lastReasoningLine, liveLastToolSummary)}
-              isThinking={true}
-              streamPhase={agentActivity as StreamPhaseStyle}
-              onClick={() => {
-                const refSnapshot = [...recentThoughtsRef.current];
-                if (refSnapshot.length > 0) {
-                  setCotModalPayload({ mode: 'structured', thoughtItems: refSnapshot });
-                } else {
-                  setCotModalPayload({ mode: 'plain', text: activeReasoning });
-                }
-                setCotOpen(true);
-              }}
-            />
-          )}
         </Box>
 
         <Box sx={{ p: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>

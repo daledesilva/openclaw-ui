@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Paper, Typography, CircularProgress, Button } from '@mui/material';
+import { Box, Paper, Typography, CircularProgress, Link } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { sanitizeDisplayText } from '../utils/sanitizeDisplayText';
 import type { LinkPreview } from '../utils/extractLinkPreviews';
@@ -50,7 +50,7 @@ const BubblePaper = styled(Paper, {
   borderTopLeftRadius: isUser ? 16 : 4,
   boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
   borderLeft: isError ? `3px solid ${theme.palette.error.main}` : undefined,
-  cursor: isThinking ? 'pointer' : 'default',
+  cursor: 'default',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'stretch',
@@ -65,7 +65,6 @@ interface ChatBubbleProps {
   /** Link previews extracted from structured JSON in gateway content */
   linkPreviews?: LinkPreview[];
   isThinking?: boolean;
-  onClick?: () => void;
   /** e.g. gateway `senderLabel` */
   caption?: string;
   /** Assistant message that is only an error / failure */
@@ -74,12 +73,19 @@ interface ChatBubbleProps {
   streamPhase?: StreamPhaseStyle;
   /** Opens chain-of-thought modal for this message (assistant bubbles with saved reasoning) */
   onViewReasoning?: () => void;
+  /**
+   * When the assistant slot has no user-visible answer yet, show this text (e.g. in-run phase line)
+   * below the header, with thinking tone.
+   */
+  phaseFallbackText?: string;
+  /** Do not show the "…" placeholder when body is empty (e.g. orphan reasoningTrace row). */
+  hideEmptyBodyPlaceholder?: boolean;
 }
 
 /**
  * Custom wrapper for MUI components providing a chat bubble UI.
  * This abstraction allows mass UI customization across the app.
- * It now supports a special 'isThinking' state for mobile CoT view.
+ * It supports a special 'isThinking' state for in-run phase chrome on the assistant slot.
  */
 export const ChatBubble: React.FC<ChatBubbleProps> = ({
   role,
@@ -87,18 +93,24 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
   imageUrls,
   linkPreviews,
   isThinking,
-  onClick,
   caption,
   isError,
   streamPhase = 'reasoning',
   onViewReasoning,
+  phaseFallbackText,
+  hideEmptyBodyPlaceholder,
 }) => {
   const isUser = role === 'user';
   const safeContent = sanitizeDisplayText(content || '');
+  const safePhaseFallback = phaseFallbackText ? sanitizeDisplayText(phaseFallbackText) : '';
   const safeCaption = caption ? sanitizeDisplayText(caption) : '';
-  const tone = isUser ? 'user' : isThinking ? 'thinking' : 'assistant';
   const showImages = imageUrls && imageUrls.length > 0;
   const showLinks = linkPreviews && linkPreviews.length > 0;
+  const hasStreamedText = !!safeContent.trim();
+  const hasAnswerMedia = showLinks || showImages;
+  const showsAnswer = hasStreamedText || hasAnswerMedia;
+
+  const phaseBody = !showsAnswer && !!safePhaseFallback.trim();
 
   return (
     <Box
@@ -109,7 +121,6 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
         maxWidth: '100%',
         minWidth: 0,
       }}
-      onClick={onClick}
     >
       <BubblePaper
         isUser={isUser}
@@ -118,18 +129,55 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
         streamPhase={isThinking ? streamPhase : undefined}
         elevation={0}
       >
+        {!isUser && onViewReasoning ? (
+          <Link
+            component="button"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onViewReasoning();
+            }}
+            underline="always"
+            sx={(theme) => ({
+              alignSelf: 'flex-start',
+              p: 0,
+              m: 0,
+              minHeight: 0,
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              fontSize: '0.4375rem',
+              fontWeight: 500,
+              lineHeight: 1.1,
+              textUnderlineOffset: '1px',
+              color: theme.palette.mode === 'dark' ? '#c4b5fd' : '#6d28d9',
+              '&:hover': {
+                color: theme.palette.mode === 'dark' ? '#e9d5ff' : '#5b21b6',
+              },
+            })}
+          >
+            thought process
+          </Link>
+        ) : null}
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, minWidth: 0, maxWidth: '100%' }}>
           {isThinking && <CircularProgress size={16} color="inherit" sx={{ mt: 0.25, flexShrink: 0 }} />}
           <Box sx={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>
-            {safeContent.trim() ? (
-              <MarkdownMessage tone={tone} isError={isError}>
+            {hasStreamedText ? (
+              <MarkdownMessage tone={isUser ? 'user' : 'assistant'} isError={isError}>
                 {safeContent}
               </MarkdownMessage>
-            ) : isThinking ? null : (
+            ) : null}
+            {phaseBody ? (
+              <MarkdownMessage tone={isUser ? 'user' : isThinking ? 'thinking' : 'assistant'} isError={isError}>
+                {safePhaseFallback}
+              </MarkdownMessage>
+            ) : null}
+            {!hasStreamedText && !phaseBody && !showsAnswer && !isThinking && !hideEmptyBodyPlaceholder ? (
               <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
                 …
               </Typography>
-            )}
+            ) : null}
             {showLinks ? <SearchResultsCarousel linkPreviews={linkPreviews!} /> : null}
             {showImages ? (
               <Box
@@ -169,19 +217,6 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
           <Typography variant="caption" sx={{ opacity: isUser ? 0.85 : 0.7, display: 'block' }}>
             {safeCaption}
           </Typography>
-        ) : null}
-        {!isUser && onViewReasoning ? (
-          <Button
-            variant="text"
-            size="small"
-            onClick={(event) => {
-              event.stopPropagation();
-              onViewReasoning();
-            }}
-            sx={{ alignSelf: 'flex-start', mt: 0.25, py: 0.25, px: 0.5, minHeight: 0, textTransform: 'none' }}
-          >
-            View reasoning
-          </Button>
         ) : null}
       </BubblePaper>
     </Box>
