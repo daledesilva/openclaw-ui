@@ -18,7 +18,8 @@ import {
 } from '@mui/material';
 import AddCommentIcon from '@mui/icons-material/AddComment';
 import MenuIcon from '@mui/icons-material/Menu';
-import { ChatBubble } from './components/ChatBubble';
+import { AgentChatBubble } from './components/AgentChatBubble';
+import { UserChatBubble } from './components/UserChatBubble';
 import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtModal, type ChainOfThoughtModalContent } from './components/ChainOfThoughtModal';
 import { GoogleGeminiPricingModal } from './components/GoogleGeminiPricingModal';
@@ -28,7 +29,6 @@ import {
   appendThoughtItem,
   applyAssistantFinalWithThoughtBuffer,
   foldFetchedHistoryToMessages,
-  traceHasDisplayableContent,
 } from './utils/recentThoughtsReducer';
 import {
   initGatewayConnection,
@@ -85,9 +85,7 @@ import {
   nextActivityFromContentChunk,
   nextActivityFromDeltaHints,
   nextActivityFromReasoningChunk,
-  phaseBubbleDisplayText,
 } from './utils/agentRunActivity';
-import type { StreamPhaseStyle } from './components/ChatBubble';
 
 export type { Message } from './chatThreadTypes';
 
@@ -104,10 +102,8 @@ export default function App() {
   const appVersion = useLiveAppVersion();
   const [tokenReady, setTokenReady] = useState(hasGatewayToken());
   const [messages, setMessages] = useState<Message[]>([]);
-  const [activeReasoning, setActiveReasoning] = useState<string>('');
   const [agentActivity, setAgentActivity] = useState<AgentRunActivity>('idle');
   const agentActivityRef = useRef<AgentRunActivity>('idle');
-  const [liveLastToolSummary, setLiveLastToolSummary] = useState<string | null>(null);
   const [runTerminalNotice, setRunTerminalNotice] = useState<RunTerminalNotice | null>(null);
   const lastStreamActivityAtRef = useRef<number>(Date.now());
   const [cotOpen, setCotOpen] = useState(false);
@@ -133,12 +129,11 @@ export default function App() {
   const routingSessionKeyRef = useRef<string>('');
   /** Non-answer signals for the current turn; flushed on `onAssistantFinal`. */
   const recentThoughtsRef = useRef<ThoughtItem[]>([]);
+  /** Bumped when the ref gains items so render re-runs and CoT affordance reads fresh `recentThoughtsRef`. */
+  const [thoughtBufferRevision, setThoughtBufferRevision] = useState(0);
   const traceSeqRef = useRef(0);
   const sessionKeyPinnedByBuild = isGatewaySessionKeyPinnedByBuild();
   const isMobile = useMediaQuery((theme: Theme) => theme.breakpoints.down('sm'));
-  const lastReasoningLine =
-    sanitizeDisplayText(activeReasoning).trim().split('\n').pop() || '';
-
   const activeThread = useMemo(
     () => threadsSnapshot.threads.find((t) => t.threadId === threadsSnapshot.activeThreadId),
     [threadsSnapshot]
@@ -284,17 +279,15 @@ export default function App() {
 
   const syncStateFromFetchedHistory = useCallback((history: FetchedChatMessage[]) => {
     setMessages(foldFetchedHistoryToMessages(history));
-    const reasoningBlocks = history
-      .filter((m) => {
-        const role = m.role.toLowerCase();
-        return (role === 'assistant' || role === 'ai') && m.reasoning.trim();
-      })
-      .map((m) => m.reasoning);
-    setActiveReasoning(
-      reasoningBlocks.length
-        ? reasoningBlocks.map((r) => sanitizeDisplayText(r)).join('\n\n---\n\n')
-        : ''
-    );
+  }, []);
+
+  const appendLiveThoughtItem = useCallback((item: ThoughtItem) => {
+    const prev = recentThoughtsRef.current;
+    const next = appendThoughtItem(prev, item);
+    recentThoughtsRef.current = next;
+    if (next !== prev) {
+      setThoughtBufferRevision((revision) => revision + 1);
+    }
   }, []);
 
   useEffect(() => {
@@ -329,8 +322,7 @@ export default function App() {
         touchStreamActivity();
         setAgentActivity((prev) => nextActivityFromReasoningChunk(prev));
         const safe = sanitizeDisplayText(chunk);
-        setActiveReasoning((prev) => prev + safe);
-        recentThoughtsRef.current = appendThoughtItem(recentThoughtsRef.current, {
+        appendLiveThoughtItem({
           kind: 'reasoningChunk',
           text: safe,
         });
@@ -339,8 +331,7 @@ export default function App() {
         touchStreamActivity();
         setAgentActivity((prev) => nextActivityFromDeltaHints(prev, info.hints));
         if (info.lastToolSummary) {
-          setLiveLastToolSummary(info.lastToolSummary);
-          recentThoughtsRef.current = appendThoughtItem(recentThoughtsRef.current, {
+          appendLiveThoughtItem({
             kind: 'toolHint',
             label: info.lastToolSummary,
           });
@@ -350,8 +341,7 @@ export default function App() {
         touchStreamActivity();
         const trimmed = sanitizeDisplayText(label).trim();
         if (trimmed) {
-          setLiveLastToolSummary(trimmed);
-          recentThoughtsRef.current = appendThoughtItem(recentThoughtsRef.current, {
+          appendLiveThoughtItem({
             kind: 'toolHint',
             label: trimmed,
           });
@@ -375,22 +365,19 @@ export default function App() {
         });
       },
       onAssistantFinal: (payload) => {
-        setMessages((prev) => {
-          const buffer = recentThoughtsRef.current;
-          recentThoughtsRef.current = [];
-          traceSeqRef.current += 1;
-          return applyAssistantFinalWithThoughtBuffer(
-            prev,
-            payload,
-            buffer,
-            `trace-${Date.now()}-${traceSeqRef.current}`
-          );
-        });
+        const bufferSnapshot = [...recentThoughtsRef.current];
+        recentThoughtsRef.current = [];
+        setThoughtBufferRevision((r) => r + 1);
+        traceSeqRef.current += 1;
+        const traceId = `trace-${Date.now()}-${traceSeqRef.current}`;
+        setMessages((prev) =>
+          applyAssistantFinalWithThoughtBuffer(prev, payload, bufferSnapshot, traceId)
+        );
       },
       onChatTerminal: (info) => {
         setAgentActivity('idle');
-        setLiveLastToolSummary(null);
         recentThoughtsRef.current = [];
+        setThoughtBufferRevision((r) => r + 1);
         touchStreamActivity();
         scheduleRefreshGatewaySessionTokens(300);
         if (info.state === 'error') {
@@ -426,25 +413,25 @@ export default function App() {
         setConnectionStatus('disconnected');
         setConnectionError('Disconnected from gateway.');
         setAgentActivity('idle');
-        setLiveLastToolSummary(null);
         recentThoughtsRef.current = [];
+        setThoughtBufferRevision((r) => r + 1);
       },
     });
     return () => {
       if (sessionsListDebounceRef.current !== null) window.clearTimeout(sessionsListDebounceRef.current);
       disconnectGateway();
     };
-  }, [tokenReady, syncStateFromFetchedHistory, scheduleRefreshGatewaySessionTokens]);
+  }, [tokenReady, syncStateFromFetchedHistory, scheduleRefreshGatewaySessionTokens, appendLiveThoughtItem]);
 
-  const openLiveThoughtModal = useCallback(() => {
-    const refSnapshot = [...recentThoughtsRef.current];
-    if (refSnapshot.length > 0) {
-      setCotModalPayload({ mode: 'structured', thoughtItems: refSnapshot });
-    } else {
-      setCotModalPayload({ mode: 'plain', text: activeReasoning });
-    }
+  const openChainOfThoughtModal = useCallback((content: ChainOfThoughtModalContent) => {
+    setCotModalPayload(content);
     setCotOpen(true);
-  }, [activeReasoning]);
+  }, []);
+
+  const liveThoughtItems = useMemo(
+    () => [...recentThoughtsRef.current],
+    [thoughtBufferRevision]
+  );
 
   if (!tokenReady) {
     return <TokenSetupScreen onTokenSet={() => setTokenReady(true)} />;
@@ -458,8 +445,7 @@ export default function App() {
   const resetLocalChatState = () => {
     setMessages([]);
     recentThoughtsRef.current = [];
-    setActiveReasoning('');
-    setLiveLastToolSummary(null);
+    setThoughtBufferRevision((r) => r + 1);
     setRunTerminalNotice(null);
     setAgentActivity('idle');
     setCotOpen(false);
@@ -533,10 +519,9 @@ export default function App() {
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text };
     setMessages((prev) => [...prev, userMsg]);
 
-    setActiveReasoning('');
     recentThoughtsRef.current = [];
+    setThoughtBufferRevision((r) => r + 1);
     setRunTerminalNotice(null);
-    setLiveLastToolSummary(null);
     setAgentActivity('pending');
     touchStreamActivity();
 
@@ -777,23 +762,6 @@ export default function App() {
                     {connectionError}
                   </Typography>
                 )}
-                {connectionStatus === 'ready' && agentActivity !== 'idle' && (
-                  <Chip
-                    size="small"
-                    label={
-                      agentActivity === 'pending'
-                        ? 'Waiting'
-                        : agentActivity === 'reasoning'
-                          ? 'Thinking'
-                          : agentActivity === 'acting'
-                            ? 'Using tools'
-                            : agentActivity === 'responding'
-                              ? 'Writing'
-                              : 'No recent activity'
-                    }
-                    sx={{ height: 20, fontSize: '0.65rem', bgcolor: 'rgba(255,255,255,0.2)' }}
-                  />
-                )}
                 {connectionStatus === 'ready' && runTerminalNotice && (
                   <Chip
                     size="small"
@@ -884,6 +852,7 @@ export default function App() {
         )}
 
         <Box
+          data-live-thought-revision={thoughtBufferRevision}
           sx={{
             flex: 1,
             overflowY: 'auto',
@@ -896,118 +865,18 @@ export default function App() {
             maxWidth: '100%',
           }}
         >
-          {messages.map((msg, index) => {
-            if (msg.role === 'ai' && msg.kind === 'reasoningTrace') {
-              const nextMsg = messages[index + 1];
-              const consumedByFollowingAssistant =
-                nextMsg &&
-                nextMsg.role === 'ai' &&
-                (!nextMsg.kind || nextMsg.kind === 'assistant');
-              if (consumedByFollowingAssistant) {
-                return null;
-              }
-              return (
-                <ChatBubble
-                  key={msg.id}
-                  role="ai"
-                  content=""
-                  hideEmptyBodyPlaceholder
-                  onViewReasoning={() => {
-                    setCotModalPayload({
-                      mode: 'structured',
-                      thoughtItems: msg.thoughtItems ?? [],
-                      ...(msg.proseReasoning?.trim() ? { proseReasoning: msg.proseReasoning } : {}),
-                    });
-                    setCotOpen(true);
-                  }}
-                />
-              );
-            }
-
-            const isLastMessage = index === messages.length - 1;
-            const runInFlight = agentActivity !== 'idle';
-            const isAssistantSlot =
-              msg.role === 'ai' && (!msg.kind || msg.kind === 'assistant');
-            const isEmptyStreamingAssistantSlot =
-              isAssistantSlot &&
-              !msg.content.trim() &&
-              !(msg.imageUrls?.length) &&
-              !(msg.linkPreviews?.length) &&
-              !msg.isError;
-
-            const prevMsg = index > 0 ? messages[index - 1] : undefined;
-            const pairedTrace =
-              prevMsg?.role === 'ai' && prevMsg.kind === 'reasoningTrace' ? prevMsg : undefined;
-
-            const onViewReasoningFromTrace = pairedTrace
-              ? () => {
-                  setCotModalPayload({
-                    mode: 'structured',
-                    thoughtItems: pairedTrace.thoughtItems ?? [],
-                    ...(pairedTrace.proseReasoning?.trim()
-                      ? { proseReasoning: pairedTrace.proseReasoning }
-                      : {}),
-                  });
-                  setCotOpen(true);
-                }
-              : undefined;
-
-            const onViewReasoningFromLegacy =
-              isAssistantSlot && msg.reasoning?.trim()
-                ? () => {
-                    setCotModalPayload({ mode: 'plain', text: sanitizeDisplayText(msg.reasoning!) });
-                    setCotOpen(true);
-                  }
-                : undefined;
-
-            const canOpenLiveCoT = traceHasDisplayableContent(
-              recentThoughtsRef.current,
-              activeReasoning || undefined,
-              true
-            );
-            const liveCoTWhenInFlight =
-              isAssistantSlot && isLastMessage && runInFlight && canOpenLiveCoT
-                ? openLiveThoughtModal
-                : undefined;
-
-            const viewReasoningHandler =
-              onViewReasoningFromTrace ?? onViewReasoningFromLegacy ?? liveCoTWhenInFlight;
-
-            if (isEmptyStreamingAssistantSlot && isLastMessage && runInFlight) {
-              const phaseText = phaseBubbleDisplayText(
-                agentActivity,
-                lastReasoningLine,
-                liveLastToolSummary
-              );
-              return (
-                <ChatBubble
-                  key={msg.id}
-                  role="ai"
-                  content={msg.content}
-                  imageUrls={msg.imageUrls}
-                  linkPreviews={msg.linkPreviews}
-                  isError={msg.isError}
-                  isThinking={agentActivity !== 'responding'}
-                  streamPhase={agentActivity as StreamPhaseStyle}
-                  phaseFallbackText={phaseText}
-                  onViewReasoning={canOpenLiveCoT ? openLiveThoughtModal : undefined}
-                />
-              );
-            }
-
-            return (
-              <ChatBubble
+          {messages.map((msg) =>
+            msg.role === 'user' ? (
+              <UserChatBubble key={msg.id} message={msg} />
+            ) : (
+              <AgentChatBubble
                 key={msg.id}
-                role={msg.role}
-                content={msg.content}
-                imageUrls={msg.imageUrls}
-                linkPreviews={msg.linkPreviews}
-                caption={msg.role === 'user' ? msg.senderLabel : undefined}
-                isError={msg.role === 'ai' ? msg.isError : undefined}
-                onViewReasoning={isAssistantSlot ? viewReasoningHandler : undefined}
+                messageText={msg.content}
+                thoughtItems={liveThoughtItems}
+                openChainOfThoughtModal={openChainOfThoughtModal}
               />
-            );
-          })}
+            )
+          )}
         </Box>
 
         <Box sx={{ p: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>

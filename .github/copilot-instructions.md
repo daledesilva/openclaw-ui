@@ -15,11 +15,12 @@ These instructions apply to all files in this repository.
 | `src/` | React + TypeScript UI |
 | `src/api/` | Gateway WebSocket client and types |
 | `src/components/` | Feature UI |
+| `src/components/atoms/` | Shared styled primitives (e.g. chat bubble shell) |
 | `scripts/` | Deploy webhook and host helpers |
 | `public/` | Static assets |
 | `docs/` | Optional deeper documentation (README is the deploy playbook) |
 
-**Architecture:** SPA connects to the OpenClaw gateway via **`VITE_OPENCLAW_GATEWAY_URL`**. Production builds often omit that var so the WS URL follows the page origin. Chat UI folds gateway streams through a **`recentThoughts`** buffer and **`applyAssistantFinalWithThoughtBuffer`** (`src/utils/recentThoughtsReducer.ts`); tools and tool results are not separate chat bubbles—they appear in the chain-of-thought modal; persisted trace data uses a **`reasoningTrace`** message merged into the assistant **`ChatBubble`** in the UI. Per-thread token totals use WebSocket **`sessions.list`** (`fetchGatewaySessionsList`, `src/api/gatewaySessionsList.ts`); canonical `agent:<id>:…` keys are aliased to short UI `sessionKey` values. **`usage.cost`** (`fetchGatewayUsageCost`, `src/api/gatewayUsageCost.ts`) can supply per-session USD on conversation rows when parseable; the top bar shows a **client-side Gemini session total** (~$X.XX, two decimals) for the active chat (not gateway rollups). See **`docs/gemini-pricing-estimates.md`**. See **`docs/chain-of-thought.md`**, **`docs/agent-run-phase.md`**, and **`docs/multiple-chat-threads.md`**. GitHub Actions can trigger **`deploy:local`** on a host via **`webhook:deploy`** (see README).
+**Architecture:** SPA connects to the OpenClaw gateway via **`VITE_OPENCLAW_GATEWAY_URL`**. Production builds often omit that var so the WS URL follows the page origin. Chat UI folds gateway streams through a **`recentThoughts`** buffer and **`applyAssistantFinalWithThoughtBuffer`** (`src/utils/recentThoughtsReducer.ts`); tools and tool results are not separate chat bubbles—they appear in the chain-of-thought modal; persisted trace data uses a **`reasoningTrace`** message merged into the assistant **`AgentChatBubble`** in the UI. Per-thread token totals use WebSocket **`sessions.list`** (`fetchGatewaySessionsList`, `src/api/gatewaySessionsList.ts`); canonical `agent:<id>:…` keys are aliased to short UI `sessionKey` values. **`usage.cost`** (`fetchGatewayUsageCost`, `src/api/gatewayUsageCost.ts`) can supply per-session USD on conversation rows when parseable; the top bar shows a **client-side Gemini session total** (~$X.XX, two decimals) for the active chat (not gateway rollups). See **`docs/gemini-pricing-estimates.md`**. See **`docs/chain-of-thought.md`**, **`docs/agent-run-phase.md`**, and **`docs/multiple-chat-threads.md`**. GitHub Actions can trigger **`deploy:local`** on a host via **`webhook:deploy`** (see README).
 
 **Key constraints:** Do not set `VITE_OPENCLAW_GATEWAY_URL` on gateway production builds unless intentional. `VITE_*` vars are public in the bundle. Dev from another origin may require gateway **`allowedOrigins`** updates. Optional dev logging: **`VITE_OPENCLAW_DEBUG`** and **`VITE_OPENCLAW_SESSIONS_DEBUG`** (see README / `.env.example`).
 
@@ -47,6 +48,34 @@ When adding or updating any convention or coding standard, always update **both*
 |---|---|---|
 | Repo-wide / always-apply | `.cursor/rules/*.mdc` | `.github/copilot-instructions.md` |
 | File-scoped | `.cursor/rules/*.mdc` (with `globs:`) | `.github/instructions/*.instructions.md` (with `applyTo:`) |
+
+---
+
+## TypeScript: imports section divider
+
+In **`*.ts` / `*.tsx`**, when the file has any **`import`** statements, put **all** imports at the top, then **two identical** full lines of **`/`** (imports-section divider, see rule file for the exact shape), then **one blank line**, then the rest of the file (types, exports, code). Omit the divider when there are **no** imports. See **`.cursor/rules/typescript-imports-section-divider.mdc`** and **`.github/instructions/typescript.instructions.md`** (Imports section divider).
+
+---
+
+## TypeScript: function style and file layout
+
+For **`*.ts` / `*.tsx`**: use **`function` declarations** for named file-level (and nested named) helpers instead of **`const fn = () => {}`** when both work. Use **arrows only when necessary** (callbacks, `styled`/`sx` shapes, tiny inline handlers).
+
+Put the file’s **primary export** first after the imports divider (when present), **file-owned types**, then the main export, then a **banner divider** (`// =============================================================================` / `Supporting functions` / `=============================================================================`), then **supporting functions** below it.
+
+Full detail: **`.cursor/rules/function-declaration-and-file-layout.mdc`** and **`.github/instructions/typescript.instructions.md`** (Function declarations and file layout).
+
+---
+
+## MUI: Styles section for `sx`
+
+In **`*.tsx`**, put **non-trivial** `sx` objects (several properties, `(theme) => …`, or reused) in a **`// Styles`** block at the **bottom** of the file as **`const …Sx: SxProps<Theme>`** with a component/file prefix. See **`.cursor/rules/mui-sx-styles-section.mdc`** and **`.github/instructions/typescript.instructions.md`**.
+
+---
+
+## JSX: `&&` instead of `? : null`
+
+When optional JSX has **no else** UI, use **`{flag && (…)}`**, not **`{flag ? (…) : null}`**. See **`.cursor/rules/jsx-conditional-render-and.mdc`**.
 
 ---
 

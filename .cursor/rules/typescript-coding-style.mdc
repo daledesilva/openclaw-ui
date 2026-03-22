@@ -36,6 +36,10 @@ const isAuthorisedEditor = user.role === 'admin' && permissions.includes('write'
 if (isAuthorisedEditor) { ... }
 ```
 
+## JSX optional branches
+
+When the **false** branch is only **`null`**, prefer **`{condition && (…)}`** over **`{condition ? (…) : null}`**. See **`.cursor/rules/jsx-conditional-render-and.mdc`**.
+
 ## Branch Comments Go Inside the Branch
 
 Place comments that explain a branch at the **start of that branch**, not before the `if` statement.
@@ -60,9 +64,71 @@ if (isAdmin) {
 - Prefer **MUI components** and the **MUI theme** (`Theme`, `useMediaQuery`, `sx`, etc.) over ad-hoc DOM styling.
 - Use **direct DOM APIs** only when necessary (e.g. unavoidable focus/scroll edge cases); keep behavior consistent with the rest of the app.
 
+## Single `props` parameter (no destructuring)
+
+When a function’s inputs are a **single object** (React function components, render props, and similar), define it with **exactly one parameter** named **`props`**, typed as that object.
+
+- **Do not** destructure in the parameter list (e.g. `({ title, onClose }) =>`).
+- **Do not** unpack `props` in the body (e.g. `const { title, onClose } = props`) only to use those fields.
+- **Always** read fields as **`props.fieldName`** so anything coming from the caller is visibly prefixed with `props.`.
+
+```tsx
+// ❌ BAD
+export const Example: React.FC<ExampleProps> = ({ title, onClose }) => (
+    <Box onClick={onClose}>{title}</Box>
+);
+
+// ❌ BAD
+export const Example: React.FC<ExampleProps> = (props) => {
+    const { title, onClose } = props;
+    return <Box onClick={onClose}>{title}</Box>;
+};
+
+// ✅ GOOD
+export const Example: React.FC<ExampleProps> = (props) => (
+    <Box onClick={props.onClose}>{props.title}</Box>
+);
+```
+
+**Out of scope:** zero-argument functions, multiple **positional** parameters, or a single **non-object** parameter (e.g. `id: string`) — use normal signatures there.
+
+## Props `interface` immediately before the function
+
+When a function takes a single **`props`** object, declare its shape as a **named `export interface`** placed **immediately above** that function (nothing else between the interface and the function).
+
+- Name the interface **`{ComponentOrFunctionName}Props`** (e.g. `AgentChatBubbleProps` before `AgentChatBubble`).
+- Prefer **`interface`** for that object; do not replace it with only an inline anonymous type on the parameter when this component or function owns the shape.
+- If the **same** props shape is shared across modules, use a **named** shared props interface (define or import it); avoid an unnamed object type on `props`.
+
+```tsx
+export interface AgentChatBubbleProps {
+    message: Message;
+    thoughtItems: ThoughtItem[];
+    openChainOfThoughtModal: (content: ChainOfThoughtModalContent) => void;
+}
+
+/** Renders the agent message bubble and chain-of-thought entry. */
+export const AgentChatBubble: React.FC<AgentChatBubbleProps> = (props) => {
+    // use props.message, props.thoughtItems, etc.
+};
+```
+
+## Function declarations and file layout
+
+See **`.cursor/rules/function-declaration-and-file-layout.mdc`** (same globs): prefer **`function`** over arrows for named units; primary export after imports/types; supporting helpers under a `// ===…===` divider.
+
+## Minimal TSDoc on every named function
+
+Every **named** function (`function foo`, exported or file-local) and every **`const` binding** whose value is a function or React component must have a **TSDoc** block **`/** … */`** **directly above** that declaration.
+
+- Keep it **minimal**: usually **one short sentence** (what it does or what the component shows). Add `@param` / `@returns` only when a single sentence is not enough.
+- **Omit** TSDoc for **inline** function expressions passed as arguments (e.g. `.map((id) => id)`, `onClick={() => props.onClose()}`) when a comment would only repeat the code.
+
 ## Colocate Styles
 
 Keep component-specific styling next to the component: MUI `sx`/`styled` on the component file, or colocated CSS if the project already uses it for that feature. Reserve `index.css` / `App.css` for global baseline styles.
+
+Non-trivial **`sx`** objects: bottom-of-file **Styles** section — see **`.cursor/rules/mui-sx-styles-section.mdc`**.
 
 ## State Management
 

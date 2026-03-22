@@ -1,0 +1,31 @@
+---
+description: All import statements at top, then slash divider, then one blank line before rest of file
+globs: "**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# TypeScript: imports section divider
+
+For **`*.ts`** and **`*.tsx`** files that contain any **`import`** statements (including **`import type`**):
+
+1. Put **all** import lines together at the **top** of the file.
+2. **Allowed above imports:** a shebang (`#!`), **`/// <reference … />`** directives, or other tooling-required headers that must be first.
+3. Immediately **after** the last import line, add **two identical full-line slash dividers**, **then exactly one blank line**, then everything else (types, exports, implementation, `export … from` re-exports).
+
+Use **this exact shape** (two identical full lines of **`/`** only, then one blank line before the next line of code). Match the length already used in this repo (both lines must be identical):
+
+```ts
+///////////////////////////
+///////////////////////////
+
+```
+
+Do **not** place types, exports, or non-import code between imports and this divider.
+
+## When to omit
+
+If the file has **no** `import` statements, **do not** add this divider.
+
+## Relation to other layout rules
+
+The **Supporting functions** banner (see **`.cursor/rules/function-declaration-and-file-layout.mdc`**) stays **below** the implementation section as documented there — it does not replace the imports divider.

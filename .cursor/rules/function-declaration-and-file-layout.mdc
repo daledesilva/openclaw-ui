@@ -1,0 +1,63 @@
+---
+description: Prefer function declarations over arrows; primary export at top, helpers below a divider
+globs: "**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# Function declarations and file layout
+
+## Prefer `function` over arrow functions
+
+Use **function declarations** (`function name() { }` / `export function name() { }`) for named, file-level (or intentionally nested) functions whenever the syntax allows.
+
+**Use arrow functions only when necessary**, for example:
+
+- Callbacks passed into APIs: `.map((x) => …)`, `.filter(…)`, `promise.then(() => …)`
+- Very small inline JSX handlers when a separate `function` would add noise
+- APIs that require a function **expression** (e.g. MUI `styled(…, { shouldForwardProp: (prop) => … })`, theme callbacks in `sx={(theme) => …}`)
+- Type predicates in `.filter((x): x is Foo => …)`
+
+```ts
+// ❌ Avoid for file-level named units
+export const runStep = (id: string) => {
+  // ...
+};
+
+// ✅ Prefer
+export function runStep(id: string) {
+  // ...
+}
+```
+
+## Primary export at the top of the file
+
+Order the file roughly as follows:
+
+1. **Imports** — all `import` / `import type` lines at the top, then the **imports section divider** (see **`.cursor/rules/typescript-imports-section-divider.mdc`**: two lines of `//////////////////////////////////////////////////////`, then one blank line)
+2. **File-owned types and constants** for the public surface (exported types, props `interface`s, enums, module-level constants the primary export needs immediately)
+3. **Primary focus** — the main reason the file exists: typically one **`export function`**, **`export async function`**, or the primary hook/component
+4. **Divider comment** (below), then **supporting** helpers
+5. **`// Styles`** banner and **`SxProps<Theme>`** constants for non-trivial MUI `sx` (see **`.cursor/rules/mui-sx-styles-section.mdc`**)
+
+Supporting code includes private helpers, default-config objects only used by the primary function, and internal subcomponents unless the file is intentionally a barrel of equals.
+
+### Divider before supporting code
+
+Immediately **above** all supporting functions, use one clear banner. Use this shape (or the same width with `=`):
+
+```ts
+// =============================================================================
+// Supporting functions
+// =============================================================================
+```
+
+Everything **below** that line should be helpers for the code above it. Those helpers should also prefer **`function` declarations**, not `const helper = () => {}`.
+
+## Nested named helpers
+
+Inside a component or function, a **nested** `function helperName() {}` is preferred over `const helperName = () => {}` when the helper has a name and both forms work.
+
+## What stays as non-functions
+
+- **`const x = styled(…)`** / **`const X = React.memo(…)`** — keep as `const` when the API returns a component or object.
+- **React `useCallback(() => …)`** — arrow (or function expression) as required by the hook.

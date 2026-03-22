@@ -23,6 +23,16 @@ export function traceHasDisplayableContent(
   return thoughtItems.length > 0;
 }
 
+/** Last `toolHint` label or `toolResult` summary in the buffer (search from end). */
+export function deriveLastToolSummaryLine(items: ThoughtItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const t = items[i]!;
+    if (t.kind === 'toolHint') return t.label;
+    if (t.kind === 'toolResult') return t.summary;
+  }
+  return null;
+}
+
 export function findLastAssistantIndex(messages: Message[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;

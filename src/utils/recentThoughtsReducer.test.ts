@@ -12,6 +12,7 @@ import {
   mergeAssistantFinalIntoMessages,
   thoughtItemsToModalSegments,
   traceHasDisplayableContent,
+  deriveLastToolSummaryLine,
   withReasoningTraceBeforeLastAssistant,
 } from './recentThoughtsReducer';
 
@@ -45,6 +46,25 @@ describe('traceHasDisplayableContent', () => {
   it('is false when empty and no prose', () => {
     expect(traceHasDisplayableContent([], '', true)).toBe(false);
     expect(traceHasDisplayableContent([], undefined, true)).toBe(false);
+  });
+});
+
+describe('deriveLastToolSummaryLine', () => {
+  it('returns null for empty items', () => {
+    expect(deriveLastToolSummaryLine([])).toBeNull();
+  });
+
+  it('returns the last tool hint or result scanning from the end', () => {
+    expect(
+      deriveLastToolSummaryLine([
+        { kind: 'toolHint', label: 'a()' },
+        { kind: 'reasoningChunk', text: 'x' },
+        { kind: 'toolResult', summary: 'done' },
+      ])
+    ).toBe('done');
+    expect(deriveLastToolSummaryLine([{ kind: 'reasoningChunk', text: 'x' }, { kind: 'toolHint', label: 'b()' }])).toBe(
+      'b()'
+    );
   });
 });
 

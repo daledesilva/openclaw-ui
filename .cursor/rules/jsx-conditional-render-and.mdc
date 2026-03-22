@@ -1,0 +1,33 @@
+---
+description: Prefer `condition && (…)` over `condition ? (…) : null` for optional JSX
+globs: "**/*.{tsx,jsx}"
+alwaysApply: false
+---
+
+# JSX: conditional render with `&&`
+
+When the **false** branch renders **nothing**, prefer **logical AND** over a ternary with **`null`**:
+
+```tsx
+// ✅ Prefer
+{isVisible && (
+  <>
+    <Title />
+    <Body />
+  </>
+)}
+
+// ❌ Avoid (when the else branch is only null)
+{isVisible ? (
+  <>
+    <Title />
+    <Body />
+  </>
+) : null}
+```
+
+- Use a **fragment** (`<>…</>`) when the conditional block has **multiple roots**; a **single child** does not require a fragment (`{show && <Item />}` is fine).
+- **Precompute** a **boolean** for long conditions (see **Precompute Complex Conditions** in TypeScript coding style), then `{thatBoolean && (…)}`.
+- **Exceptions:** keep a **ternary** (or `if` / early return) when the **else** branch renders **different UI**, not empty.
+
+**Caveat:** Do not use `&&` when the left-hand value can be a **number** like `0` (React will render `0`). Use explicit boolean (`count > 0 && …`) or ternary.

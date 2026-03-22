@@ -1,0 +1,57 @@
+---
+description: Colocate non-trivial MUI sx objects in a bottom-of-file Styles section with a divider
+globs: "**/*.{tsx,jsx}"
+alwaysApply: false
+---
+
+# MUI `sx` — file-level Styles section
+
+## When to extract
+
+Move **`sx`** values **out of JSX** into named constants when they are:
+
+- **Multi-property** objects (roughly three or more properties), or
+- **Theme callbacks** (`(theme) => ({ ... })`), or
+- **Shared or repeated** across elements in the same file
+
+Tiny one-property `sx` (e.g. `sx={{ mt: 1 }}`) may stay inline if it stays obvious.
+
+## Where to put them
+
+Place them at the **bottom** of the file, **after** the primary component and **after** supporting functions (if any), under a **banner divider**:
+
+```tsx
+// =============================================================================
+// Styles
+// =============================================================================
+```
+
+## Naming and typing
+
+- Use a **file-scoped prefix** so names stay unique and searchable (e.g. `agentBubbleChromeOuterSx`, `thoughtProcessLinkSx`).
+- Type theme-aware objects as **`SxProps<Theme>`** and import **`Theme`** (and **`SxProps`**) from **`@mui/material/styles`**.
+
+```tsx
+import type { SxProps, Theme } from '@mui/material/styles';
+
+const thoughtProcessLinkSx: SxProps<Theme> = (theme) => ({
+  color: theme.palette.mode === 'dark' ? '#c4b5fd' : '#6d28d9',
+  // ...
+});
+```
+
+## Order relative to other sections
+
+Typical file order:
+
+1. Imports  
+2. Types / primary export  
+3. `// Supporting functions` + helpers  
+4. `// Styles` + `const …Sx`  
+
+Module load initializes Style constants before React runs the first render, so components above can reference them safely.
+
+## Exceptions
+
+- **`styled()`** component definitions stay next to their usage or in `atoms/` as already documented.
+- **`sx`** that **must** close over render-only locals can stay inline, or the parent can pass a computed `SxProps` from the component body (not the bottom section).
