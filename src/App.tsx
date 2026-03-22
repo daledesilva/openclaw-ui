@@ -22,6 +22,7 @@ import { ChatBubble } from './components/ChatBubble';
 import { ReasoningTraceBubble } from './components/ReasoningTraceBubble';
 import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtModal, type ChainOfThoughtModalContent } from './components/ChainOfThoughtModal';
+import { GoogleGeminiPricingModal } from './components/GoogleGeminiPricingModal';
 import { TokenSetupScreen } from './components/TokenSetupScreen';
 import type { Message, ThoughtItem } from './chatThreadTypes';
 import {
@@ -46,13 +47,13 @@ import {
   extractDefaultAgentIdFromHealthPayload,
   extractDefaultAgentIdFromSessionsListPayload,
   extractSessionTokenStatsByKey,
-  formatTokenBreakdown,
   logGatewaySessionsListCostProbe,
   type GatewaySessionTokenStats,
 } from './api/gatewaySessionsList';
 import {
   canonicalOpenClawSessionKey,
   formatUsdEstimate,
+  formatUsdSessionClientTotal,
   logGatewayUsageCostProbe,
   mergeParsedGatewayUsageCost,
   parseGatewayUsageCostPayload,
@@ -76,6 +77,7 @@ import { computeThreadMessageCount } from './utils/conversationStats';
 import type { FetchedChatMessage } from './api/gateway';
 import { useLiveAppVersion } from './useLiveAppVersion';
 import { sanitizeDisplayText } from './utils/sanitizeDisplayText';
+import { sumMessageEstimatedUsd } from './utils/geminiPricingEstimate';
 import {
   type AgentRunActivity,
   inputPlaceholderForActivity,
@@ -124,6 +126,7 @@ export default function App() {
   const gatewayDefaultAgentIdRef = useRef<string>('main');
   const [gatewayUsageCost, setGatewayUsageCost] = useState<ParsedGatewayUsageCost | null>(null);
   const [threadDrawerOpen, setThreadDrawerOpen] = useState(false);
+  const [geminiPricingModalOpen, setGeminiPricingModalOpen] = useState(false);
   /** Ignore late `chat.history` results after the user switched threads. */
   const historyFetchGenerationRef = useRef(0);
   /** Active gateway `sessionKey` for routing incoming `chat` events (updated synchronously on switch). */
@@ -155,34 +158,6 @@ export default function App() {
     return n !== undefined ? `${n.toLocaleString()} tokens` : null;
   }, [activeThread, gatewaySessionTokensByKey]);
 
-  const headerCostLabel = useMemo((): string | null => {
-    if (!activeThread || !gatewayUsageCost) return null;
-    const per = sessionOnlyUsageCostUsd(activeThread.sessionKey, gatewayUsageCost, gatewayDefaultAgentId);
-    if (per !== undefined) return formatUsdEstimate(per);
-    const map = gatewayUsageCost.bySessionKey;
-    const hasMap = map && Object.keys(map).length > 0;
-    if (!hasMap && gatewayUsageCost.aggregateUsd !== undefined) {
-      return `${formatUsdEstimate(gatewayUsageCost.aggregateUsd)} (all sessions)`;
-    }
-    return null;
-  }, [activeThread, gatewayUsageCost, gatewayDefaultAgentId]);
-
-  const statsTooltipText = useMemo(() => {
-    const lines: string[] = [];
-    const breakdown = formatTokenBreakdown(
-      activeThread ? gatewaySessionTokensByKey[activeThread.sessionKey] : undefined
-    );
-    lines.push(
-      breakdown
-        ? `Tokens: ${breakdown} (from gateway sessions.list).`
-        : 'Token totals come from the gateway session store via WebSocket sessions.list.'
-    );
-    lines.push(
-      'Short thread keys (e.g. webchat-…) match canonical gateway keys (agent:<agentId>:…). Dollar cost uses usage.cost when the gateway returns parseable fields; set VITE_OPENCLAW_SESSIONS_DEBUG=1 to log raw payloads.'
-    );
-    return lines.join(' ');
-  }, [activeThread, gatewaySessionTokensByKey]);
-
   const activeMessageCount = useMemo(
     () =>
       computeThreadMessageCount(messages, {
@@ -190,6 +165,8 @@ export default function App() {
       }),
     [messages, agentActivity]
   );
+
+  const sessionGeminiEstimateUsd = useMemo(() => sumMessageEstimatedUsd(messages), [messages]);
 
   const refreshGatewaySessionTokens = useCallback(async () => {
     try {
@@ -651,6 +628,26 @@ export default function App() {
           );
         })}
       </List>
+      <Box
+        sx={{
+          flexShrink: 0,
+          borderTop: 1,
+          borderColor: 'divider',
+          px: 1,
+          py: 0.75,
+        }}
+      >
+        <Button
+          size="small"
+          variant="text"
+          color="inherit"
+          fullWidth
+          sx={{ fontSize: '0.72rem', justifyContent: 'center' }}
+          onClick={() => setGeminiPricingModalOpen(true)}
+        >
+          Model pricing
+        </Button>
+      </Box>
     </Box>
   );
 
@@ -810,31 +807,30 @@ export default function App() {
             </Box>
             {connectionStatus === 'ready' && activeThread && (
               <Box sx={{ justifySelf: 'end', minWidth: 0, alignSelf: 'start' }}>
-                <Tooltip title={statsTooltipText} placement="bottom-end">
-                  <Typography
-                    variant="caption"
-                    component="span"
-                    sx={{
-                      display: 'block',
-                      m: 0,
-                      pt: 0.125,
-                      cursor: 'help',
-                      opacity: 0.7,
-                      fontSize: '0.68rem',
-                      lineHeight: 1.35,
-                      letterSpacing: '0.01em',
-                      textAlign: 'right',
-                      whiteSpace: 'nowrap',
-                      maxWidth: 'min(280px, 42vw)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {activeMessageCount} messages
-                    {activeThreadTokenSegment ? ` · ${activeThreadTokenSegment}` : ''}
-                    {headerCostLabel ? ` · ${headerCostLabel}` : ''}
-                  </Typography>
-                </Tooltip>
+                <Typography
+                  variant="caption"
+                  component="span"
+                  sx={{
+                    display: 'block',
+                    m: 0,
+                    pt: 0.125,
+                    opacity: 0.7,
+                    fontSize: '0.68rem',
+                    lineHeight: 1.35,
+                    letterSpacing: '0.01em',
+                    textAlign: 'right',
+                    whiteSpace: 'nowrap',
+                    maxWidth: 'min(280px, 42vw)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {activeMessageCount} messages
+                  {activeThreadTokenSegment ? ` · ${activeThreadTokenSegment}` : ''}
+                  {sessionGeminiEstimateUsd !== undefined
+                    ? ` · ${formatUsdSessionClientTotal(sessionGeminiEstimateUsd)}`
+                    : ''}
+                </Typography>
               </Box>
             )}
           </Box>
@@ -977,6 +973,10 @@ export default function App() {
           setCotModalPayload(null);
         }}
         content={cotModalPayload ?? { mode: 'plain', text: '' }}
+      />
+      <GoogleGeminiPricingModal
+        open={geminiPricingModalOpen}
+        onClose={() => setGeminiPricingModalOpen(false)}
       />
     </Box>
   );

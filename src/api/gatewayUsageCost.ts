@@ -34,6 +34,9 @@ const TOP_LEVEL_USD_KEYS = [
   'estimated_usd',
   'costUsd',
   'cost_usd',
+  /** OpenClaw gateway `usage.cost` rollups use this under `totals` (and sometimes at root). */
+  'totalCost',
+  'total_cost',
   'usd',
   'totalCostUsd',
   'total_cost_usd',
@@ -154,6 +157,13 @@ export function formatUsdEstimate(usd: number): string {
   const abs = Math.abs(usd);
   const digits = abs >= 100 ? 0 : abs >= 1 ? 2 : 4;
   return `~$${usd.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: digits })}`;
+}
+
+/** Session client-side total: always two fraction digits, ~ prefix (list-price math, not invoice). */
+export function formatUsdSessionClientTotal(usd: number): string {
+  if (!Number.isFinite(usd)) return '';
+  const rounded = Math.round(usd * 100) / 100;
+  return `~$${rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function mergeParsedGatewayUsageCost(

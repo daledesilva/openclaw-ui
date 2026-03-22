@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chatSessionKeysMatchForRouting,
   displayTotalTokens,
   extractDefaultAgentIdFromHealthPayload,
   extractDefaultAgentIdFromSessionsListPayload,
@@ -7,6 +8,23 @@ import {
   openClawSessionSuffixFromCanonicalKey,
   resolveSessionKeyFromEntry,
 } from './gatewaySessionsList';
+
+describe('chatSessionKeysMatchForRouting', () => {
+  it('matches short webchat key to canonical agent key', () => {
+    expect(
+      chatSessionKeysMatchForRouting(
+        'webchat-ea37ec97-64d0-4063-9a5d-06bc9372e01e',
+        'agent:main:webchat-ea37ec97-64d0-4063-9a5d-06bc9372e01e'
+      )
+    ).toBe(true);
+  });
+  it('matches identical keys', () => {
+    expect(chatSessionKeysMatchForRouting('main', 'main')).toBe(true);
+  });
+  it('rejects different sessions', () => {
+    expect(chatSessionKeysMatchForRouting('webchat-a', 'agent:main:webchat-b')).toBe(false);
+  });
+});
 
 describe('extractSessionTokenStatsByKey', () => {
   it('parses array of sessions with sessionKey and camelCase tokens', () => {

@@ -60,6 +60,9 @@ export function mergeAssistantFinalIntoMessages(
     imageUrls: payload.imageUrls.length ? payload.imageUrls : undefined,
     linkPreviews: payload.linkPreviews.length ? payload.linkPreviews : undefined,
     isError: payload.isError,
+    ...(payload.estimatedCostUsd !== undefined
+      ? { estimatedCostUsd: payload.estimatedCostUsd }
+      : {}),
   };
   return [...prev.slice(0, lastIdx), mergedAssistant];
 }
@@ -107,6 +110,7 @@ export function assistantHistoryRowDisplaysToUser(msg: FetchedChatMessage): bool
 export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Message[] {
   const out: Message[] = [];
   let buffer: ThoughtItem[] = [];
+  let pendingUsd = 0;
 
   history.forEach((msg, index) => {
     if (msg.role === 'toolresult') {
@@ -133,7 +137,11 @@ export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Mes
         buffer = appendThoughtItem(buffer, { kind: 'reasoningChunk', text: reasoningTrimmed });
       }
 
-      if (!assistantHistoryRowDisplaysToUser(msg)) return;
+      const rowEstimate = msg.estimatedCostUsd;
+      if (!assistantHistoryRowDisplaysToUser(msg)) {
+        if (rowEstimate !== undefined) pendingUsd += rowEstimate;
+        return;
+      }
 
       if (buffer.length > 0) {
         out.push({
@@ -146,6 +154,13 @@ export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Mes
         buffer = [];
       }
 
+      const carry = pendingUsd;
+      pendingUsd = 0;
+      const part = rowEstimate ?? 0;
+      const bubbleTotal = carry + part;
+      const costField =
+        bubbleTotal !== 0 || rowEstimate !== undefined ? { estimatedCostUsd: bubbleTotal } : {};
+
       out.push({
         id: idBase,
         role: 'ai',
@@ -156,6 +171,7 @@ export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Mes
         isError: msg.isError,
         imageUrls: msg.imageUrls,
         linkPreviews: msg.linkPreviews,
+        ...costField,
       });
       return;
     }
@@ -181,6 +197,19 @@ export function foldFetchedHistoryToMessages(history: FetchedChatMessage[]): Mes
       content: '',
       thoughtItems: [...buffer],
     });
+  }
+
+  if (pendingUsd !== 0) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      const m = out[i]!;
+      if (m.role === 'ai' && m.kind === 'assistant') {
+        out[i] = {
+          ...m,
+          estimatedCostUsd: (m.estimatedCostUsd ?? 0) + pendingUsd,
+        };
+        break;
+      }
+    }
   }
 
   return out;

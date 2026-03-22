@@ -60,6 +60,22 @@ export function openClawSessionSuffixFromCanonicalKey(canonicalKey: string): str
 }
 
 /**
+ * True when a `chat` event's `sessionKey` refers to the same conversation as the UI's active key
+ * (`webchat-…` vs `agent:main:webchat-…`).
+ */
+export function chatSessionKeysMatchForRouting(activeKey: string, eventKey: string): boolean {
+  const a = activeKey.trim();
+  const e = eventKey.trim();
+  if (!a || !e) return false;
+  if (a === e) return true;
+  const eventSuffix = openClawSessionSuffixFromCanonicalKey(e);
+  if (eventSuffix && eventSuffix === a) return true;
+  const activeSuffix = openClawSessionSuffixFromCanonicalKey(a);
+  if (activeSuffix && activeSuffix === e) return true;
+  return false;
+}
+
+/**
  * Normalize `sessions.list` payload into sessionKey → token stats.
  * Handles several plausible gateway shapes without assuming a fixed schema.
  */

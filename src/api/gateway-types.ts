@@ -6,6 +6,7 @@ import {
   stripLeadingLinkListJsonFromBody,
 } from '../utils/extractLinkPreviews';
 import { extractLinkPreviewsFromGeminiWebSearchPayload } from '../utils/extractGeminiWebSearchPreviews';
+import { estimateUsdFromUsage } from '../utils/geminiPricingEstimate';
 
 export type { LinkPreview } from '../utils/extractLinkPreviews';
 
@@ -229,6 +230,12 @@ export interface RawHistoryMessage {
   errorMessage?: string;
   stopReason?: string;
   model?: string;
+  /** e.g. `google` / `google-generative-ai` when present on assistant rows */
+  provider?: string;
+  /** Transport label (e.g. `google-generative-ai`); used when `provider` is absent */
+  api?: string;
+  /** Gateway usage object (`input` / `output` / `cacheRead` / …) */
+  usage?: unknown;
   toolCallId?: string;
   toolName?: string;
   isError?: boolean;
@@ -249,6 +256,10 @@ export interface FetchedChatMessage {
   toolName?: string;
   /** Original gateway `content` for tool results (pretty-print when expanded) */
   toolRawPayload?: unknown;
+  /** Client estimate from Vertex-style $/1M table (Google models only) */
+  estimatedCostUsd?: number;
+  modelRef?: string;
+  provider?: string;
 }
 
 export interface ChatHistoryResponse {
@@ -264,6 +275,7 @@ export interface AssistantDisplayPayload {
   imageUrls: string[];
   toolCalls: ToolCallEntry[];
   isError?: boolean;
+  estimatedCostUsd?: number;
 }
 
 export function assistantDisplayBody(
@@ -319,6 +331,15 @@ export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
   const content = assistantDisplayBody(role, parsed, m, {
     omitToolSummary: role === 'assistant' || role === 'ai',
   });
+  const pricingProvider =
+    (typeof m.provider === 'string' && m.provider) ||
+    (typeof m.api === 'string' && m.api) ||
+    undefined;
+  const modelRef = typeof m.model === 'string' ? m.model : undefined;
+  const estimatedCostUsd =
+    role === 'assistant' || role === 'ai'
+      ? estimateUsdFromUsage(pricingProvider, modelRef, m.usage)
+      : undefined;
   return {
     role,
     content,
@@ -330,6 +351,9 @@ export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
     imageUrls: parsed.imageUrls.length ? parsed.imageUrls : undefined,
     linkPreviews: parsed.linkPreviews.length ? parsed.linkPreviews : undefined,
     toolCalls: parsed.toolCalls.length ? parsed.toolCalls : undefined,
+    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
+    ...(modelRef !== undefined ? { modelRef } : {}),
+    ...(typeof m.provider === 'string' ? { provider: m.provider } : {}),
   };
 }
 
@@ -338,9 +362,20 @@ export function mapRawHistoryMessage(m: RawHistoryMessage): FetchedChatMessage {
  */
 export function parseAssistantDisplayPayload(
   message: unknown,
-  raw?: Pick<RawHistoryMessage, 'errorMessage' | 'stopReason' | 'model'> & { role?: string }
+  raw?: Pick<RawHistoryMessage, 'errorMessage' | 'stopReason' | 'model' | 'provider' | 'usage'> & {
+    role?: string;
+  }
 ): AssistantDisplayPayload {
   const role = (raw?.role ?? 'assistant').toLowerCase();
+  const mergedRaw: Pick<RawHistoryMessage, 'errorMessage' | 'stopReason' | 'model' | 'provider' | 'usage'> & {
+    role?: string;
+  } = { ...raw };
+  if (isRecord(message)) {
+    if (typeof message.model === 'string') mergedRaw.model = message.model;
+    if (typeof message.provider === 'string') mergedRaw.provider = message.provider;
+    if ('usage' in message) mergedRaw.usage = message.usage;
+    if (typeof message.api === 'string' && !mergedRaw.provider) mergedRaw.provider = message.api;
+  }
   let contentPayload: unknown = message;
   if (typeof message === 'string') {
     contentPayload = message;
@@ -352,10 +387,14 @@ export function parseAssistantDisplayPayload(
     }
   }
   const parsed = parseContentParts(contentPayload);
-  const content = assistantDisplayBody(role, parsed, raw ?? {}, { omitToolSummary: true });
-  const hasAssistantError = role === 'assistant' && !!(raw?.errorMessage?.trim());
+  const content = assistantDisplayBody(role, parsed, mergedRaw, { omitToolSummary: true });
+  const hasAssistantError = role === 'assistant' && !!(mergedRaw.errorMessage?.trim());
   const isError =
     hasAssistantError && !parsed.body.trim() && !parsed.toolCalls.length && !parsed.toolLines.length;
+  const estimatedCostUsd =
+    role === 'assistant' || role === 'ai'
+      ? estimateUsdFromUsage(mergedRaw.provider, mergedRaw.model, mergedRaw.usage)
+      : undefined;
   return {
     content,
     reasoning: parsed.reasoning,
@@ -363,6 +402,7 @@ export function parseAssistantDisplayPayload(
     imageUrls: parsed.imageUrls,
     toolCalls: parsed.toolCalls,
     isError: isError || undefined,
+    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
   };
 }
 

@@ -15,6 +15,7 @@ import {
   type StreamPhaseHints,
 } from './gateway-types';
 import { lastToolSummaryFromStreamMessage, toolHintFromAgentStreamData } from '../utils/toolBubbleSummary';
+import { chatSessionKeysMatchForRouting } from './gatewaySessionsList';
 
 export type { FetchedChatMessage } from './gateway-types';
 
@@ -408,7 +409,11 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
 
   const eventSessionKey = payload.sessionKey?.trim();
   const activeForRouting = getActiveChatSessionKeyForChatRouting?.()?.trim();
-  if (eventSessionKey && activeForRouting && eventSessionKey !== activeForRouting) {
+  if (
+    eventSessionKey &&
+    activeForRouting &&
+    !chatSessionKeysMatchForRouting(activeForRouting, eventSessionKey)
+  ) {
     if (DEBUG) {
       console.log(
         `${LOG} chat event ignored (sessionKey mismatch) event=${eventSessionKey} active=${activeForRouting}`

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canonicalOpenClawSessionKey,
+  formatUsdSessionClientTotal,
   mergeParsedGatewayUsageCost,
   parseGatewayUsageCostPayload,
   sessionOnlyUsageCostUsd,
@@ -9,6 +10,19 @@ import {
 describe('parseGatewayUsageCostPayload', () => {
   it('reads top-level totalUsd', () => {
     expect(parseGatewayUsageCostPayload({ totalUsd: 12.34 }).aggregateUsd).toBe(12.34);
+  });
+
+  it('reads gateway usage.cost shape (totals.totalCost)', () => {
+    const p = parseGatewayUsageCostPayload({
+      updatedAt: 1,
+      days: 31,
+      daily: [{ date: '2026-03-22', totalCost: 0.5 }],
+      totals: {
+        totalTokens: 100,
+        totalCost: 1.07058555,
+      },
+    });
+    expect(p.aggregateUsd).toBe(1.07058555);
   });
 
   it('reads sessions array with key and costUsd', () => {
@@ -47,6 +61,13 @@ describe('sessionOnlyUsageCostUsd', () => {
     });
     expect(sessionOnlyUsageCostUsd('webchat-x', parsed, 'main')).toBe(2);
     expect(sessionOnlyUsageCostUsd('agent:main:webchat-x', parsed, 'main')).toBe(2);
+  });
+});
+
+describe('formatUsdSessionClientTotal', () => {
+  it('rounds to two decimal places with en-US grouping', () => {
+    expect(formatUsdSessionClientTotal(1.234)).toBe('~$1.23');
+    expect(formatUsdSessionClientTotal(1234.5)).toBe('~$1,234.50');
   });
 });
 

@@ -24,4 +24,6 @@ export interface Message {
   thoughtItems?: ThoughtItem[];
   /** Structured thinking from final parse or history, shown in the trace bubble */
   proseReasoning?: string;
+  /** Sum of client Gemini/Vertex estimates for this bubble (see docs/gemini-pricing-estimates.md) */
+  estimatedCostUsd?: number;
 }
