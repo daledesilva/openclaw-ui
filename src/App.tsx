@@ -644,7 +644,7 @@ export default function App() {
             p: isMobile ? 2 : 3,
             display: 'flex',
             flexDirection: 'column',
-            gap: 2,
+            gap: 1,
             minWidth: 0,
             maxWidth: '100%',
           }}

@@ -24,12 +24,15 @@ export const ChatBubblePaper = styled(Paper, {
 
   let borderBottomRightRadius: number;
   let borderTopLeftRadius: number;
+  let borderBottomLeftRadius: number;
   if (isUserMessage) {
     borderBottomRightRadius = 4;
     borderTopLeftRadius = 16;
+    borderBottomLeftRadius = 16;
   } else {
     borderBottomRightRadius = 16;
-    borderTopLeftRadius = 4;
+    borderTopLeftRadius = 16;
+    borderBottomLeftRadius = 4;
   }
 
   return {
@@ -41,6 +44,7 @@ export const ChatBubblePaper = styled(Paper, {
     backgroundColor,
     color,
     borderBottomRightRadius,
+    borderBottomLeftRadius,
     borderTopLeftRadius,
     boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
     cursor: 'default',

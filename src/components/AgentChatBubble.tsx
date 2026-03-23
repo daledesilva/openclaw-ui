@@ -67,7 +67,7 @@ export function AgentChatBubble(props: AgentChatBubbleProps): React.ReactNode {
 const agentBubbleSx: SxProps<Theme> = {
   display: 'flex',
   justifyContent: 'flex-start',
-  mb: 1,
+  mb: 0,
   maxWidth: '100%',
   minWidth: 0,
 };

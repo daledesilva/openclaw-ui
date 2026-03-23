@@ -45,7 +45,7 @@ export function UserChatBubble(props: UserChatBubbleProps): React.ReactNode {
 const outerSx: SxProps<Theme> = {
   display: 'flex',
   justifyContent: 'flex-end',
-  mb: 1,
+  mb: 0,
   maxWidth: '100%',
   minWidth: 0,
 };

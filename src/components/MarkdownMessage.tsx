@@ -19,12 +19,20 @@ export interface MarkdownMessageProps {
   children: string;
   tone?: MarkdownTone;
   isError?: boolean;
+  fontSize?: string;
+  lineHeight?: string;
+  textAlign?: 'left' | 'center' | 'right';
+  color?: string;
 }
 
 export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
   children,
   tone = 'assistant',
   isError,
+  fontSize,
+  lineHeight,
+  textAlign,
+  color,
 }) => {
   const theme = useTheme();
   const isUser = tone === 'user';
@@ -196,9 +204,10 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
   return (
     <Box
       sx={{
-        color: textColor,
-        fontSize: theme.typography.body1.fontSize,
-        lineHeight: theme.typography.body1.lineHeight,
+        color: color ?? textColor,
+        fontSize: fontSize ?? theme.typography.body1.fontSize,
+        lineHeight: lineHeight ?? theme.typography.body1.lineHeight,
+        textAlign: textAlign ?? undefined,
         fontStyle: isThinking ? 'italic' : 'normal',
         maxWidth: '100%',
         minWidth: 0,
