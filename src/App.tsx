@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from 'react';
 import {
   Box,
-  Paper,
   Typography,
   useMediaQuery,
   Theme,
@@ -9,7 +8,6 @@ import {
   Button,
   IconButton,
   Tooltip,
-  Chip,
   Drawer,
   List,
   ListItemButton,
@@ -17,14 +15,13 @@ import {
   Toolbar,
 } from '@mui/material';
 import AddCommentIcon from '@mui/icons-material/AddComment';
-import MenuIcon from '@mui/icons-material/Menu';
 import { AgentChatBubble } from './components/AgentChatBubble';
+import { ChatHeader, type RunTerminalNotice } from './components/ChatHeader';
 import { UserChatBubble } from './components/UserChatBubble';
 import { MessageInput } from './components/MessageInput';
 import { ChainOfThoughtModal, type ChainOfThoughtModalContent } from './components/ChainOfThoughtModal';
 import { GoogleGeminiPricingModal } from './components/GoogleGeminiPricingModal';
 import { TokenSetupScreen } from './components/TokenSetupScreen';
-import type { ChatMessage } from './chatThreadTypes';
 import { useChatMessageThread } from './utils/recentThoughtsReducer';
 import {
   initGatewayConnection,
@@ -37,7 +34,6 @@ import {
   clearStoredGatewayToken,
   disconnectGateway,
   requestGatewayReconnect,
-  type GatewayStreamEvent,
 } from './api/gateway';
 import {
   displayTotalTokens,
@@ -50,7 +46,6 @@ import {
 import {
   canonicalOpenClawSessionKey,
   formatUsdEstimate,
-  formatUsdSessionClientTotal,
   logGatewayUsageCostProbe,
   mergeParsedGatewayUsageCost,
   parseGatewayUsageCostPayload,
@@ -87,8 +82,6 @@ type ConnectionStatus = 'disconnected' | 'connecting' | 'ready' | 'error';
 const AGENT_RUN_STALE_AFTER_MS = 90_000;
 
 const THREAD_DRAWER_WIDTH = 268;
-
-type RunTerminalNotice = { kind: 'error'; message: string } | { kind: 'aborted' };
 
 export default function App() {
   const appVersion = useLiveAppVersion();
@@ -281,42 +274,43 @@ export default function App() {
     if (!tokenReady) return;
     initGatewayConnection({
       getActiveChatSessionKey: () => routingSessionKeyRef.current || undefined,
-      onMessage: (message) => {
+      onEvent: (frame) => {
+        console.log('[EVENT] onEvent', frame);
         if (import.meta.env.DEV) {
-          console.log('[OpenClaw gateway] generic message:', message);
+          console.log('[OpenClaw gateway] event frame:', frame);
         }
-        const envelope = message as { type?: string; event?: string; payload?: unknown };
-        if (envelope.type === 'event' && envelope.event === 'health' && envelope.payload !== undefined) {
-          const fromHealth = extractDefaultAgentIdFromHealthPayload(envelope.payload);
+        if (frame.event === 'health' && frame.payload !== undefined) {
+          const fromHealth = extractDefaultAgentIdFromHealthPayload(frame.payload);
           if (fromHealth) {
             gatewayDefaultAgentIdRef.current = fromHealth;
             setGatewayDefaultAgentId(fromHealth);
           }
         }
-      },
-      onEvent: (event: GatewayStreamEvent) => {
-        handleStreamEvent(event);
+        handleStreamEvent(frame);
         scheduleRefreshSessionMeta(300);
       },
       onConnected: () => {
+        console.log('[EVENT] onConnected');
         setConnectionStatus('ready');
         setConnectionError(null);
         void refreshGatewaySessionTokensRef.current();
         const sessionKeyWhenHistoryRequested = routingSessionKeyRef.current;
         fetchChatHistory(100, sessionKeyWhenHistoryRequested || undefined)
-          .then((history) => {
+          .then((_history) => {
             if (routingSessionKeyRef.current !== sessionKeyWhenHistoryRequested) return;
-            // replaceFromFetchedHistory(history);
+            // replaceFromFetchedHistory(_history);
           })
           .catch((err) => {
             console.error('[OpenClaw gateway] chat.history failed:', err);
           });
       },
       onConnectError: (error) => {
+        console.log('[EVENT] onConnectError', error);
         setConnectionStatus('error');
         setConnectionError(error);
       },
       onDisconnected: () => {
+        console.log('[EVENT] onDisconnected');
         setConnectionStatus('disconnected');
         setConnectionError('Disconnected from gateway.');
         setAssistantRunChrome('idle');
@@ -360,9 +354,10 @@ export default function App() {
       const fetchGeneration = ++historyFetchGenerationRef.current;
       commitThreadsSnapshot(nextSnapshot);
       resetLocalChatState();
-      const history = await fetchChatHistory(100, newSessionKey);
+      const _history = await fetchChatHistory(100, newSessionKey);
       if (fetchGeneration !== historyFetchGenerationRef.current) return;
-      // replaceFromFetchedHistory(history);
+      void _history;
+      // replaceFromFetchedHistory(_history);
     } catch (err) {
       console.error('[OpenClaw gateway] new chat / chat.history failed:', err);
     } finally {
@@ -383,9 +378,9 @@ export default function App() {
     resetLocalChatState();
     setThreadDrawerOpen(false);
     fetchChatHistory(100, target.sessionKey)
-      .then((history) => {
+      .then((_history) => {
         if (fetchGeneration !== historyFetchGenerationRef.current) return;
-        // replaceFromFetchedHistory(history);
+        // replaceFromFetchedHistory(_history);
       })
       .catch((err) => {
         console.error('[OpenClaw gateway] chat.history failed on thread switch:', err);
@@ -572,134 +567,19 @@ export default function App() {
           overflow: 'hidden',
         }}
       >
-        <Paper elevation={0} sx={{ py: 0.75, px: 1.5, bgcolor: 'primary.main', color: 'primary.contrastText', borderRadius: 0 }}>
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns:
-                connectionStatus === 'ready' && activeThread
-                  ? 'minmax(0, 1fr) max-content'
-                  : 'minmax(0, 1fr)',
-              alignItems: 'start',
-              columnGap: 1.25,
-              rowGap: 0.35,
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-              {isMobile && (
-                <IconButton
-                  color="inherit"
-                  size="small"
-                  aria-label="Open conversation list"
-                  onClick={() => setThreadDrawerOpen(true)}
-                  sx={{ p: 0.5, flexShrink: 0, opacity: 0.92 }}
-                >
-                  <MenuIcon fontSize="small" />
-                </IconButton>
-              )}
-              <Typography
-                component="h1"
-                sx={{
-                  position: 'absolute',
-                  width: '1px',
-                  height: '1px',
-                  p: 0,
-                  m: '-1px',
-                  overflow: 'hidden',
-                  clip: 'rect(0, 0, 0, 0)',
-                  whiteSpace: 'nowrap',
-                  border: 0,
-                }}
-              >
-                OpenClaw
-              </Typography>
-              <Box
-                sx={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  gap: 0.5,
-                  columnGap: 1,
-                  minWidth: 0,
-                }}
-              >
-                <Typography
-                  variant="caption"
-                  component="span"
-                  sx={{ opacity: 0.72, fontSize: '0.68rem', letterSpacing: '0.02em' }}
-                >
-                  {appVersion}
-                </Typography>
-                {connectionStatus === 'connecting' && (
-                  <Typography variant="caption" component="span" sx={{ opacity: 0.88, fontSize: '0.68rem' }}>
-                    Connecting…
-                  </Typography>
-                )}
-                {connectionStatus === 'disconnected' && connectionError && (
-                  <Typography
-                    variant="caption"
-                    component="span"
-                    sx={{ opacity: 0.88, fontSize: '0.68rem', lineHeight: 1.3 }}
-                  >
-                    {connectionError}
-                  </Typography>
-                )}
-                {connectionStatus === 'error' && connectionError && (
-                  <Typography variant="caption" component="span" sx={{ opacity: 0.88, fontSize: '0.68rem' }}>
-                    {connectionError}
-                  </Typography>
-                )}
-                {connectionStatus === 'ready' && runTerminalNotice && (
-                  <Chip
-                    size="small"
-                    color={runTerminalNotice.kind === 'error' ? 'error' : 'default'}
-                    label={
-                      runTerminalNotice.kind === 'aborted'
-                        ? 'Stopped'
-                        : runTerminalNotice.message.slice(0, 80) +
-                          (runTerminalNotice.message.length > 80 ? '…' : '')
-                    }
-                    onDelete={() => setRunTerminalNotice(null)}
-                    sx={{
-                      height: 20,
-                      maxWidth: '100%',
-                      fontSize: '0.65rem',
-                      '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
-                    }}
-                  />
-                )}
-              </Box>
-            </Box>
-            {connectionStatus === 'ready' && activeThread && (
-              <Box sx={{ justifySelf: 'end', minWidth: 0, alignSelf: 'start' }}>
-                <Typography
-                  variant="caption"
-                  component="span"
-                  sx={{
-                    display: 'block',
-                    m: 0,
-                    pt: 0.125,
-                    opacity: 0.7,
-                    fontSize: '0.68rem',
-                    lineHeight: 1.35,
-                    letterSpacing: '0.01em',
-                    textAlign: 'right',
-                    whiteSpace: 'nowrap',
-                    maxWidth: 'min(280px, 42vw)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
-                >
-                  {activeMessageCount} messages
-                  {activeThreadTokenSegment ? ` · ${activeThreadTokenSegment}` : ''}
-                  {sessionGeminiEstimateUsd !== undefined
-                    ? ` · ${formatUsdSessionClientTotal(sessionGeminiEstimateUsd)}`
-                    : ''}
-                </Typography>
-              </Box>
-            )}
-          </Box>
-        </Paper>
+        <ChatHeader
+          appVersion={appVersion}
+          connectionStatus={connectionStatus}
+          isMobile={isMobile}
+          onOpenThreadDrawer={() => setThreadDrawerOpen(true)}
+          connectionError={connectionError}
+          runTerminalNotice={runTerminalNotice}
+          onDismissRunTerminalNotice={() => setRunTerminalNotice(null)}
+          showThreadStats={connectionStatus === 'ready' && Boolean(activeThread)}
+          activeMessageCount={activeMessageCount}
+          activeThreadTokenSegment={activeThreadTokenSegment}
+          sessionGeminiEstimateUsd={sessionGeminiEstimateUsd}
+        />
 
         {connectionError && connectionStatus === 'error' && (
           <Alert
@@ -757,7 +637,7 @@ export default function App() {
             ) : (
               <AgentChatBubble
                 key={messageIndex}
-                messageText={String(msg.content ?? '')}
+                messageText={msg.content ? String(msg.content) : null}
                 thoughtItems={msg.thoughtItems ?? []}
                 openChainOfThoughtModal={(thoughtItems) => openChainOfThoughtModal(thoughtItems)}
               />
@@ -768,7 +648,7 @@ export default function App() {
         <Box sx={{ p: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>
           <MessageInput
             onSend={handleSend}
-            disabled={connectionStatus !== 'ready' || isAssistantRunBlockingInput(assistantRunChrome)}
+            disabled={connectionStatus !== 'ready'}// || isAssistantRunBlockingInput(assistantRunChrome)}
             placeholder={inputPlaceholderForAssistantRun(assistantRunChrome, connectionStatus)}
           />
         </Box>

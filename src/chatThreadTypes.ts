@@ -8,6 +8,7 @@ export type InternalMonologue = {
 
 export type ToolCall = RawHistoryItem & {
   kind: 'toolCall';
+  toolName: string;
 };
 
 export type ThoughtItem = ToolCall | InternalMonologue;
@@ -17,4 +18,8 @@ export interface ChatMessage extends RawHistoryItem {
   estimatedCostUsd?: number;
   modelRef?: string;
   provider?: string;
+  /** Parsed thinking / chain-of-thought prose (assistant rows). */
+  reasoning?: string;
+  /** UI-only prose alongside structured trace rows. */
+  proseReasoning?: string;
 }

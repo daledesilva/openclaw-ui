@@ -1,8 +1,9 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { RawHistoryItem } from '../api/gateway-types';
-import type { FetchedChatMessage, GatewayStreamEvent } from '../api/gateway';
+import { parseAssistantDisplayPayload } from '../api/gateway-types';
+import type { FetchedChatMessage, GatewayChatEventPayload, GatewayEventFrame } from '../api/gateway';
 import type { ChatMessage, ThoughtItem } from '../chatThreadTypes';
-import { sanitizeDisplayText } from './sanitizeDisplayText';
+import { toolHintFromAgentStreamData } from './toolBubbleSummary';
 
 //
 
@@ -46,6 +47,7 @@ export function parseHistoryIntoChatMessages(historyItems: RawHistoryItem[]): Ch
         thoughtBuffer.push({
           kind: 'toolCall',
           ...historyItem,
+          toolName: historyItem.toolName ?? '',
         });
         return;
 
@@ -71,53 +73,71 @@ export function parseFetchedHistoryIntoChatMessages(history: FetchedChatMessage[
   return parseHistoryIntoChatMessages(history as unknown as RawHistoryItem[]);
 }
 
+function isGatewayEventFrame(raw: unknown): raw is GatewayEventFrame {
+  return (
+    typeof raw === 'object' &&
+    raw !== null &&
+    (raw as { type?: string }).type === 'event' &&
+    typeof (raw as { event?: unknown }).event === 'string'
+  );
+}
+
 /**
  * Owns transcript rows, the live thought buffer, and all `RawHistoryItem` / `FetchedChatMessage` folding.
  */
 export function useChatMessageThread() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [recentThoughts, setRecentThoughts] = useState<ThoughtItem[]>([]);
+  const recentsThoughtsRef = useRef<ThoughtItem[]>([]);
 
-  const appendAssistantContentDelta = useCallback((chunk: string) => {
-    const safe = sanitizeDisplayText(chunk);
-    setMessages((prev) => {
-      const lastMsg = prev[prev.length - 1];
-      if (lastMsg && (lastMsg.role === 'assistant' || lastMsg.role === 'ai')) {
-        const updatedMessages = [...prev];
-        const priorContent = typeof lastMsg.content === 'string' ? lastMsg.content : '';
-        updatedMessages[updatedMessages.length - 1] = {
-          ...lastMsg,
-          content: priorContent + safe,
-        };
-        return updatedMessages;
+  const handleStreamEvent = useCallback((raw: unknown) => {
+    console.log('handleStreamEvent', raw);
+    if (!isGatewayEventFrame(raw)) return;
+
+    const { event: ev, payload } = raw;
+
+    if (ev === 'chat') {
+      const p = payload as GatewayChatEventPayload | undefined;
+      if (!p) return;
+      const { state, message, errorMessage } = p;
+
+      if (state === 'final' && message !== undefined && message !== null) {
+        const parsed = parseAssistantDisplayPayload(message, {
+          errorMessage,
+          role: 'assistant',
+        });
+        const thoughtItemsSnapshot = [...recentsThoughtsRef.current];
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: parsed.content, thoughtItems: thoughtItemsSnapshot },
+        ]);
       }
-      return prev;
-    });
+
+      if (state === 'final' || state === 'aborted' || state === 'error') {
+        recentsThoughtsRef.current = [];
+      }
+      return;
+    }
+
+    if (typeof ev === 'string' && (ev.startsWith('agent') || ev.includes('stream'))) {
+      const p = payload as { stream?: string; data?: unknown } | undefined;
+      if (p?.stream === 'reasoning' && p.data && typeof (p.data as { text?: unknown }).text === 'string') {
+        const text = (p.data as { text: string }).text;
+        recentsThoughtsRef.current = [
+          ...recentsThoughtsRef.current,
+          { kind: 'internalMonologue', thought: text },
+        ];
+        setMessages((prev) => [...prev, { role: 'assistant', content: null, thoughtItems: recentsThoughtsRef.current }]);
+      }
+      const toolLabel = p?.data ? toolHintFromAgentStreamData(p.data) : null;
+      if (toolLabel) {
+        recentsThoughtsRef.current = [
+          ...recentsThoughtsRef.current,
+          { kind: 'toolCall', toolName: toolLabel },
+        ];
+        setMessages((prev) => [...prev, { role: 'assistant', content: null, thoughtItems: recentsThoughtsRef.current }]);
+      }
+    }
   }, []);
-
-  const handleStreamEvent = useCallback(
-    (event: GatewayStreamEvent) => {
-      switch (event.kind) {
-        case 'reasoning':
-          setRecentThoughts((prev) => [...prev, { kind: 'internalMonologue', thought: event.text }]);
-          break;
-        case 'content':
-          // appendAssistantContentDelta(event.text);
-          setMessages((prev) => [...prev, { role: 'assistant', content: event.text }]);
-          break;
-        // case 'chatDelta':
-        // case 'agentStreamToolHint':
-        //   onStreamActivityRef.current?.();
-        //   break;
-        // case 'assistantFinal':
-        //   break;
-        case 'chatTerminal':
-          setRecentThoughts([]);
-          break;
-      }
-    },
-    [appendAssistantContentDelta]
-  );
 
   const addUserMessage = useCallback((message: string) => {
     setMessages((prev) => [...prev, { role: 'user', content: message }]);

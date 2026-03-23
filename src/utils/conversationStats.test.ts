@@ -5,8 +5,8 @@ import { computeThreadConversationStats, computeThreadMessageCount } from './con
 describe('computeThreadConversationStats', () => {
   it('counts messages and sums content length', () => {
     const messages: ChatMessage[] = [
-      { id: '1', role: 'user', content: 'hello' },
-      { id: '2', role: 'ai', kind: 'assistant', content: 'world' },
+      { role: 'user', content: 'hello' },
+      { role: 'ai', content: 'world' },
     ];
     expect(computeThreadConversationStats(messages)).toEqual({
       messageCount: 2,
@@ -17,14 +17,12 @@ describe('computeThreadConversationStats', () => {
   it('includes reasoning and reasoningTrace text', () => {
     const messages: ChatMessage[] = [
       {
-        id: '1',
         role: 'ai',
-        kind: 'reasoningTrace',
         content: '',
-        thoughtItems: [{ kind: 'toolHint', label: 'read' }],
+        thoughtItems: [{ kind: 'toolCall', toolName: 'read', content: '' }],
         proseReasoning: 'thinking',
       },
-      { id: '2', role: 'ai', kind: 'assistant', content: 'ok', reasoning: 'because' },
+      { role: 'ai', content: 'ok', reasoning: 'because' },
     ];
     const { textCharacterCount } = computeThreadConversationStats(messages);
     expect(textCharacterCount).toBe('read'.length + 'thinking'.length + 'ok'.length + 'because'.length);
@@ -32,8 +30,8 @@ describe('computeThreadConversationStats', () => {
 
   it('omits trailing empty assistant row when requested', () => {
     const messages: ChatMessage[] = [
-      { id: '1', role: 'user', content: 'hi' },
-      { id: '2', role: 'ai', kind: 'assistant', content: '' },
+      { role: 'user', content: 'hi' },
+      { role: 'ai', content: '' },
     ];
     expect(
       computeThreadConversationStats(messages, { omitTrailingEmptyAssistantPlaceholder: true })
@@ -44,8 +42,8 @@ describe('computeThreadConversationStats', () => {
 describe('computeThreadMessageCount', () => {
   it('matches messageCount from computeThreadConversationStats', () => {
     const messages: ChatMessage[] = [
-      { id: '1', role: 'user', content: 'hello' },
-      { id: '2', role: 'ai', kind: 'assistant', content: 'world' },
+      { role: 'user', content: 'hello' },
+      { role: 'ai', content: 'world' },
     ];
     expect(computeThreadMessageCount(messages)).toBe(
       computeThreadConversationStats(messages).messageCount

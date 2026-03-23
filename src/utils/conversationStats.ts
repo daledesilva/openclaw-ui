@@ -6,6 +6,10 @@ function messageContentLength(message: ChatMessage): number {
 
 function approxTextCharactersFromMessage(message: ChatMessage): number {
   let n = messageContentLength(message);
+  const reasoning = (message as { reasoning?: unknown }).reasoning;
+  if (typeof reasoning === 'string') n += reasoning.length;
+  const proseReasoning = (message as { proseReasoning?: unknown }).proseReasoning;
+  if (typeof proseReasoning === 'string') n += proseReasoning.length;
   for (const item of message.thoughtItems ?? []) {
     if (item.kind === 'internalMonologue') n += item.thought.length;
     else if (item.kind === 'toolCall') {

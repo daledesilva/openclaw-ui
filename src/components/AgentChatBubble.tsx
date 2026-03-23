@@ -12,7 +12,7 @@ import { ChatBubblePaper } from './atoms/ChatBubblePaper';
 //////////////////////////////////////////////////////
 
 export interface AgentChatBubbleProps {
-  messageText: string;
+  messageText: string | null;
   thoughtItems: ThoughtItem[];
   openChainOfThoughtModal?: (content: ChainOfThoughtModalContent) => void;
 }

@@ -5,15 +5,11 @@ import {
 } from './device-auth';
 import { VITE_APP_VERSION_FULL } from '../appVersion';
 import {
-  type AssistantDisplayPayload,
   type ChatHistoryResponse,
   type FetchedChatMessage,
   type RawHistoryItem,
-  extractStreamText,
   mapRawHistoryMessage,
-  parseAssistantDisplayPayload,
 } from './gateway-types';
-import { lastToolSummaryFromStreamMessage, toolHintFromAgentStreamData } from '../utils/toolBubbleSummary';
 import { chatSessionKeysMatchForRouting } from './gatewaySessionsList';
 
 export type { FetchedChatMessage } from './gateway-types';
@@ -21,32 +17,28 @@ export type { FetchedChatMessage } from './gateway-types';
 const LOG = '[OpenClaw gateway]';
 const DEBUG = import.meta.env.VITE_OPENCLAW_DEBUG === '1' || import.meta.env.DEV;
 
-/** Terminal `chat` event payload surfaced to the UI (after stream handling when applicable). */
-export interface ChatTerminalInfo {
-  state: 'final' | 'aborted' | 'error';
-  errorMessage?: string;
-  runId?: string;
-}
-
-/** Per-`delta` chat event: tool summary for live thought buffer (no app-wide stream typing). */
-export interface ChatDeltaInfo {
-  runId?: string;
-  seq?: number;
-  /** Collapsed label for the last `toolCall` part in this delta, if any. */
-  lastToolSummary: string | null;
-}
-
 /**
- * Normalized stream lifecycle for the chat transcript (reasoning, deltas, body text, final, terminal).
- * Delivered via {@link initGatewayConnection}`s `onEvent` so the UI can forward to a single handler (e.g. transcript hook).
+ * WebSocket `type: "event"` frame after JSON parse. Extra fields are allowed; callers should narrow on `event`.
+ * `chat` frames are only delivered when `payload.sessionKey` matches {@link initGatewayConnection}`s
+ * `getActiveChatSessionKey` (when both are present).
  */
-export type GatewayStreamEvent =
-  | { kind: 'reasoning'; text: string }
-  | { kind: 'chatDelta'; runId?: string; seq?: number; lastToolSummary: string | null }
-  | { kind: 'agentStreamToolHint'; label: string }
-  | { kind: 'content'; text: string }
-  | { kind: 'assistantFinal'; payload: AssistantDisplayPayload }
-  | { kind: 'chatTerminal'; state: 'final' | 'aborted' | 'error'; errorMessage?: string; runId?: string };
+export type GatewayEventFrame = {
+  type: 'event';
+  event: string;
+  payload?: unknown;
+  seq?: number;
+  stateVersion?: unknown;
+} & Record<string, unknown>;
+
+/** Payload shape for `event === "chat"` (OpenClaw `ChatEventSchema`). */
+export interface GatewayChatEventPayload {
+  runId?: string;
+  sessionKey?: string;
+  seq?: number;
+  state?: 'delta' | 'final' | 'aborted' | 'error';
+  message?: unknown;
+  errorMessage?: string;
+}
 
 function logOutbound(obj: unknown, redactToken = false) {
   const safe = redactToken && typeof obj === 'object' && obj !== null && 'params' in obj
@@ -75,7 +67,7 @@ let socket: WebSocket | null = null;
 /** When set, `chat` events whose `payload.sessionKey` differs are ignored (multi-thread UI). */
 let getActiveChatSessionKeyForChatRouting: (() => string | undefined) | null = null;
 let onMessageCallback: ((message: unknown) => void) | null = null;
-let onStreamEventCallback: ((event: GatewayStreamEvent) => void) | null = null;
+let onRawEventCallback: ((frame: GatewayEventFrame) => void) | null = null;
 let onConnectedCallback: (() => void) | null = null;
 let onConnectErrorCallback: ((error: string) => void) | null = null;
 let onDisconnectedCallback: (() => void) | null = null;
@@ -275,10 +267,10 @@ function connect() {
 
     console.log(`${LOG} message`, data);
 
-    const t = (data as { type?: string }).type;
+    const type = (data as { type?: string }).type;
     const ev = (data as { event?: string }).event;
 
-    if (t === 'event' && ev === 'connect.challenge') {
+    if (type === 'event' && ev === 'connect.challenge') {
       challengeReceived = true;
       logInbound(data, `in event connect.challenge`);
       const payload = (data as { payload?: { nonce?: string } }).payload;
@@ -288,7 +280,7 @@ function connect() {
       return;
     }
 
-    if (t === 'res') {
+    if (type === 'res') {
       const res = data as {
         id?: string;
         ok?: boolean;
@@ -342,30 +334,26 @@ function connect() {
       return;
     }
 
-    if (t === 'event' && ev === 'chat') {
-      const payload = (data as { payload?: ChatEventPayload }).payload;
+    if (type === 'event' && ev === 'chat') {
+      const payload = (data as { payload?: GatewayChatEventPayload }).payload;
       logInbound(data, `in event chat seq=${payload?.seq} state=${payload?.state}`);
-      handleChatEvent(payload);
+      if (!shouldDeliverChatEventToClient(payload)) {
+        return;
+      }
+      onRawEventCallback?.(data as GatewayEventFrame);
       return;
     }
 
-    if (t === 'event') {
+    if (type === 'event') {
       logInbound(data, `in event ${ev}`);
-      if (ev?.startsWith('agent') || ev?.includes('stream')) {
-        const p = (data as { payload?: { stream?: string; data?: unknown } }).payload;
-        if (p?.stream === 'reasoning' && p?.data && typeof (p.data as Record<string, unknown>).text === 'string') {
-          onStreamEventCallback?.({ kind: 'reasoning', text: (p.data as { text: string }).text });
-        }
-        const toolLabel = p?.data ? toolHintFromAgentStreamData(p.data) : null;
-        if (toolLabel) {
-          onStreamEventCallback?.({ kind: 'agentStreamToolHint', label: toolLabel });
-        }
-      } else if (ev && !ROUTINE_EVENTS.has(ev)) {
+      if (ev && !ROUTINE_EVENTS.has(ev)) {
         logUnhandled(data);
       }
-      onMessageCallback?.(data);
+      onRawEventCallback?.(data as GatewayEventFrame);
       return;
     }
+
+    console.log('[EVENT] something else', data);
 
     logUnhandled(data);
     onMessageCallback?.(data);
@@ -399,17 +387,8 @@ function connect() {
   };
 }
 
-interface ChatEventPayload {
-  runId?: string;
-  sessionKey?: string;
-  seq?: number;
-  state?: 'delta' | 'final' | 'aborted' | 'error';
-  message?: unknown;
-  errorMessage?: string;
-}
-
-function handleChatEvent(payload: ChatEventPayload | undefined) {
-  if (!payload) return;
+function shouldDeliverChatEventToClient(payload: GatewayChatEventPayload | undefined): boolean {
+  if (!payload) return false;
 
   const eventSessionKey = payload.sessionKey?.trim();
   const activeForRouting = getActiveChatSessionKeyForChatRouting?.()?.trim();
@@ -423,43 +402,15 @@ function handleChatEvent(payload: ChatEventPayload | undefined) {
         `${LOG} chat event ignored (sessionKey mismatch) event=${eventSessionKey} active=${activeForRouting}`
       );
     }
-    return;
+    return false;
   }
 
-  const { state, message, errorMessage, runId, seq } = payload;
-
-  if (state === 'delta') {
-    const lastToolSummary = lastToolSummaryFromStreamMessage(message);
-    onStreamEventCallback?.({ kind: 'chatDelta', runId, seq, lastToolSummary });
+  const { state, errorMessage } = payload;
+  if ((state === 'final' || state === 'aborted' || state === 'error') && errorMessage) {
+    console.error(`${LOG} chat ${state}:`, errorMessage);
   }
 
-  if (state === 'delta' || state === 'final') {
-    if (message !== undefined && message !== null) {
-      const text = extractStreamText(message);
-      if (text) {
-        onStreamEventCallback?.({ kind: 'content', text });
-      } else if (DEBUG && typeof message === 'object' && message !== null) {
-        console.log(`${LOG} chat message shape:`, JSON.stringify(message, null, 2));
-      }
-    }
-  }
-
-  if (state === 'final' && message !== undefined && message !== null) {
-    onStreamEventCallback?.({
-      kind: 'assistantFinal',
-      payload: parseAssistantDisplayPayload(message, {
-        errorMessage,
-        role: 'assistant',
-      }),
-    });
-  }
-
-  if (state === 'final' || state === 'aborted' || state === 'error') {
-    if (errorMessage) {
-      console.error(`${LOG} chat ${state}:`, errorMessage);
-    }
-    onStreamEventCallback?.({ kind: 'chatTerminal', state, errorMessage, runId });
-  }
+  return true;
 }
 
 function sendReq<T>(method: string, params: Record<string, unknown>): Promise<T> {
@@ -547,9 +498,10 @@ export function initGatewayConnection({
   onDisconnected,
   getActiveChatSessionKey,
 }: {
-  onMessage: (message: unknown) => void;
-  /** Reasoning stream, chat deltas, content chunks, assistant final, and chat terminal (one discriminated union). */
-  onEvent: (event: GatewayStreamEvent) => void;
+  /** Optional: invoked only for non-`event` / unexpected top-level frames (not used for normal `type: "event"` traffic). */
+  onMessage?: (message: unknown) => void;
+  /** Every inbound `type: "event"` frame except `connect.challenge` (handled internally). `chat` events are session-filtered. */
+  onEvent: (frame: GatewayEventFrame) => void;
   onConnected?: () => void;
   onConnectError?: (error: string) => void;
   /** Socket closed after a successful handshake (not a deliberate `disconnectGateway` / client close). */
@@ -561,8 +513,8 @@ export function initGatewayConnection({
   getActiveChatSessionKey?: () => string | undefined;
 }) {
   getActiveChatSessionKeyForChatRouting = getActiveChatSessionKey ?? null;
-  onMessageCallback = onMessage;
-  onStreamEventCallback = onEvent;
+  onMessageCallback = onMessage ?? null;
+  onRawEventCallback = onEvent;
   onConnectedCallback = onConnected ?? null;
   onConnectErrorCallback = onConnectError ?? null;
   onDisconnectedCallback = onDisconnected ?? null;

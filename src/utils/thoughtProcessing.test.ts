@@ -9,13 +9,16 @@ describe('deriveRecentToolSummaryLine', () => {
   it('returns the last tool hint or result scanning from the end', () => {
     expect(
       deriveRecentToolSummaryLine([
-        { kind: 'toolHint', label: 'a()' },
-        { kind: 'reasoningChunk', text: 'x' },
-        { kind: 'toolResult', summary: 'done' },
+        { kind: 'toolCall', toolName: 'a', content: '' },
+        { kind: 'internalMonologue', thought: 'x' },
+        { kind: 'toolCall', toolName: 't', content: 'done' },
       ])
     ).toBe('done');
-    expect(deriveRecentToolSummaryLine([{ kind: 'reasoningChunk', text: 'x' }, { kind: 'toolHint', label: 'b()' }])).toBe(
-      'b()'
-    );
+    expect(
+      deriveRecentToolSummaryLine([
+        { kind: 'internalMonologue', thought: 'x' },
+        { kind: 'toolCall', toolName: 'b', content: 'b()' },
+      ])
+    ).toBe('b()');
   });
 });
