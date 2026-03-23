@@ -16,6 +16,8 @@ import {
 } from '@mui/material';
 import AddCommentIcon from '@mui/icons-material/AddComment';
 import { AgentChatBubble } from './components/AgentChatBubble';
+import { AssistantAbortedChatBubble } from './components/AssistantAbortedChatBubble';
+import { AssistantErrorChatBubble } from './components/AssistantErrorChatBubble';
 import { ChatHeader, type RunTerminalNotice } from './components/ChatHeader';
 import { UserChatBubble } from './components/UserChatBubble';
 import { MessageInput } from './components/MessageInput';
@@ -23,6 +25,7 @@ import { ChainOfThoughtModal, type ChainOfThoughtModalContent } from './componen
 import { GoogleGeminiPricingModal } from './components/GoogleGeminiPricingModal';
 import { TokenSetupScreen } from './components/TokenSetupScreen';
 import { useChatMessageThread } from './utils/recentThoughtsReducer';
+import { MOCK_ALL_BUBBLES_SESSION_KEY } from './mocks/mockChatHistory/mockAllBubblesRawHistoryItems';
 import {
   initGatewayConnection,
   sendChatMessage,
@@ -93,6 +96,7 @@ export default function App() {
   const {
     messages,
     handleStreamEvent,
+    replaceFromFetchedHistory,
   } = useChatMessageThread();
   const [assistantRunChrome, setAssistantRunChrome] = useState<AssistantRunChromeState>('idle');
   const assistantRunChromeRef = useRef<AssistantRunChromeState>('idle');
@@ -255,6 +259,21 @@ export default function App() {
     scheduleRefreshSessionMeta(150);
   }, [activeThread?.threadId, connectionStatus, scheduleRefreshSessionMeta]);
 
+  // Dev-only: load mock bubbles immediately when the active thread is the mock session.
+  // This keeps the UI usable even if the gateway websocket never becomes `ready`.
+  useEffect(() => {
+    if (activeThread?.sessionKey !== MOCK_ALL_BUBBLES_SESSION_KEY) return;
+    const fetchGeneration = ++historyFetchGenerationRef.current;
+    void fetchChatHistory(100, activeThread.sessionKey)
+      .then((history) => {
+        if (fetchGeneration !== historyFetchGenerationRef.current) return;
+        replaceFromFetchedHistory(history);
+      })
+      .catch((err) => {
+        console.error('[OpenClaw gateway] mock chat.history failed:', err);
+      });
+  }, [activeThread?.sessionKey, replaceFromFetchedHistory]);
+
   useEffect(() => {
     assistantRunChromeRef.current = assistantRunChrome;
   }, [assistantRunChrome]);
@@ -298,7 +317,7 @@ export default function App() {
         fetchChatHistory(100, sessionKeyWhenHistoryRequested || undefined)
           .then((_history) => {
             if (routingSessionKeyRef.current !== sessionKeyWhenHistoryRequested) return;
-            // replaceFromFetchedHistory(_history);
+            replaceFromFetchedHistory(_history);
           })
           .catch((err) => {
             console.error('[OpenClaw gateway] chat.history failed:', err);
@@ -356,8 +375,7 @@ export default function App() {
       resetLocalChatState();
       const _history = await fetchChatHistory(100, newSessionKey);
       if (fetchGeneration !== historyFetchGenerationRef.current) return;
-      void _history;
-      // replaceFromFetchedHistory(_history);
+      replaceFromFetchedHistory(_history);
     } catch (err) {
       console.error('[OpenClaw gateway] new chat / chat.history failed:', err);
     } finally {
@@ -380,7 +398,7 @@ export default function App() {
     fetchChatHistory(100, target.sessionKey)
       .then((_history) => {
         if (fetchGeneration !== historyFetchGenerationRef.current) return;
-        // replaceFromFetchedHistory(_history);
+        replaceFromFetchedHistory(_history);
       })
       .catch((err) => {
         console.error('[OpenClaw gateway] chat.history failed on thread switch:', err);
@@ -634,6 +652,20 @@ export default function App() {
           {messages.map((msg, messageIndex) => {
             return msg.role === 'user' ? (
               <UserChatBubble key={messageIndex} messageText={String(msg.content ?? '')} />
+            ) : msg.kind === 'error' ? (
+              <AssistantErrorChatBubble
+                key={messageIndex}
+                messageText={String(msg.content ?? '')}
+                thoughtItems={msg.thoughtItems ?? []}
+                openChainOfThoughtModal={(thoughtItems) => openChainOfThoughtModal(thoughtItems)}
+              />
+            ) : msg.kind === 'abortion' ? (
+              <AssistantAbortedChatBubble
+                key={messageIndex}
+                messageText={String(msg.content ?? '')}
+                thoughtItems={msg.thoughtItems ?? []}
+                openChainOfThoughtModal={(thoughtItems) => openChainOfThoughtModal(thoughtItems)}
+              />
             ) : (
               <AgentChatBubble
                 key={messageIndex}

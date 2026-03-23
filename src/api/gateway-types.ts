@@ -241,9 +241,18 @@ export function mapRawHistoryMessage(m: RawHistoryItem) {
   }
 
   const parsed = parseContentParts(m.content);
-  const hasAssistantError = role === 'assistant' && !!(m.errorMessage?.trim());
-  const isError =
+  const isAssistantRole = role === 'assistant' || role === 'ai';
+  const hasAssistantError = isAssistantRole && !!(m.errorMessage?.trim());
+  const assistantErrorDetected =
     hasAssistantError && !parsed.body.trim() && !parsed.toolLines.length && !parsed.toolCalls.length;
+
+  const assistantKind = isAssistantRole
+    ? m.stopReason === 'aborted'
+      ? 'abortion'
+      : assistantErrorDetected
+        ? 'error'
+        : 'message'
+    : undefined;
   const content = assistantDisplayBody(role, parsed, m, {
     omitToolSummary: role === 'assistant' || role === 'ai',
   });
@@ -263,7 +272,7 @@ export function mapRawHistoryMessage(m: RawHistoryItem) {
     senderLabel:
       typeof m.senderLabel === 'string' ? sanitizeDisplayText(m.senderLabel) : undefined,
     timestamp: typeof m.timestamp === 'number' ? m.timestamp : undefined,
-    isError,
+    kind: assistantKind,
     toolCalls: parsed.toolCalls.length ? parsed.toolCalls : undefined,
     ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
     ...(modelRef !== undefined ? { modelRef } : {}),

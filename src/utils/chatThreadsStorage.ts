@@ -1,5 +1,9 @@
 import type { GatewaySessionTokenStats } from '../api/gatewaySessionsList';
 import { displayTotalTokens } from '../api/gatewaySessionsList';
+import {
+  MOCK_ALL_BUBBLES_SESSION_KEY,
+  MOCK_ALL_BUBBLES_THREAD_LABEL,
+} from '../mocks/mockChatHistory/mockAllBubblesRawHistoryItems';
 
 /** Persisted chat threads (gateway `sessionKey` per conversation). */
 export const CHAT_THREADS_STORAGE_KEY = 'openclaw-ui-chat-threads-v1';
@@ -115,24 +119,45 @@ export function collapseThreadsSnapshotForPinnedSessionKey(
 
 /** Load threads from `localStorage`, migrate legacy `openclaw-ui-session-key` once, or create defaults. */
 export function loadChatThreadsFromStorage(): ChatThreadsSnapshot {
+  let snapshot: ChatThreadsSnapshot | null = null;
+  let usedFreshSnapshot = false;
+
   try {
     const raw = localStorage.getItem(CHAT_THREADS_STORAGE_KEY);
     if (raw?.trim()) {
       const parsed = JSON.parse(raw) as ChatThreadsSnapshot;
       if (parsed.version === 1 && Array.isArray(parsed.threads) && parsed.threads.length > 0) {
-        return collapseThreadsSnapshotForPinnedSessionKey(normalizeChatThreadsSnapshot(parsed));
+        snapshot = collapseThreadsSnapshotForPinnedSessionKey(normalizeChatThreadsSnapshot(parsed));
       }
     }
   } catch {
     /* fall through */
   }
 
-  const migrated = tryMigrateFromLegacyWebchatKey();
-  if (migrated) return collapseThreadsSnapshotForPinnedSessionKey(migrated);
+  if (!snapshot) {
+    const migrated = tryMigrateFromLegacyWebchatKey();
+    if (migrated) snapshot = collapseThreadsSnapshotForPinnedSessionKey(migrated);
+  }
 
-  const fresh = createDefaultChatThreadsSnapshot();
-  persistChatThreadsSnapshot(fresh);
-  return fresh;
+  if (!snapshot) {
+    snapshot = createDefaultChatThreadsSnapshot();
+    usedFreshSnapshot = true;
+    persistChatThreadsSnapshot(snapshot);
+  }
+
+  const shouldSeedMockThread = import.meta.env.DEV && !pinnedSessionKeyFromEnv();
+  if (shouldSeedMockThread) {
+    const hasMockThread = snapshot.threads.some((t) => t.sessionKey === MOCK_ALL_BUBBLES_SESSION_KEY);
+    if (!hasMockThread) {
+      const originalActiveThreadId = snapshot.activeThreadId;
+      const next = addThreadToSnapshot(snapshot, MOCK_ALL_BUBBLES_THREAD_LABEL, MOCK_ALL_BUBBLES_SESSION_KEY);
+      const out = usedFreshSnapshot ? next : { ...next, activeThreadId: originalActiveThreadId };
+      persistChatThreadsSnapshot(out);
+      return out;
+    }
+  }
+
+  return snapshot;
 }
 
 export function addThreadToSnapshot(

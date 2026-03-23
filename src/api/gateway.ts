@@ -11,6 +11,10 @@ import {
   mapRawHistoryMessage,
 } from './gateway-types';
 import { chatSessionKeysMatchForRouting } from './gatewaySessionsList';
+import {
+  MOCK_ALL_BUBBLES_SESSION_KEY,
+  mockAllBubblesRawHistoryItems,
+} from '../mocks/mockChatHistory/mockAllBubblesRawHistoryItems';
 
 export type { FetchedChatMessage } from './gateway-types';
 
@@ -451,6 +455,9 @@ export function sendMessageToGateway(message: string) {
 
 export function fetchChatHistory(limit = 100, sessionKeyOverride?: string): Promise<FetchedChatMessage[]> {
   const key = sessionKeyOverride?.trim() || sessionKey();
+  if (key === MOCK_ALL_BUBBLES_SESSION_KEY) {
+    return Promise.resolve(mockAllBubblesRawHistoryItems.map((m) => mapRawHistoryMessage(m)).slice(0, limit));
+  }
   return sendReq<ChatHistoryResponse | RawHistoryItem[]>('chat.history', {
     sessionKey: key,
     limit,

@@ -1,9 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
 import type { RawHistoryItem } from '../api/gateway-types';
-import { parseAssistantDisplayPayload } from '../api/gateway-types';
 import type { FetchedChatMessage, GatewayChatEventPayload, GatewayEventFrame } from '../api/gateway';
 import type { ChatMessage, ThoughtItem } from '../chatThreadTypes';
-import { toolHintFromAgentStreamData } from './toolBubbleSummary';
+import { extractMessageFromProviderPayload } from './extractMessageFromProviderPayload';
 
 //
 
@@ -98,54 +97,99 @@ export function useChatMessageThread() {
     if (ev === 'chat') {
       const p = payload as GatewayChatEventPayload | undefined;
       if (!p) return;
-      const { state, message, errorMessage } = p;
+      const { state, message } = p;
 
-      if (state === 'final' && message !== undefined && message !== null) {
-        const parsed = parseAssistantDisplayPayload(message, {
-          errorMessage,
-          role: 'assistant',
-        });
+      if (state === 'final') {
+        if (message == undefined || message == null) return;
+        const contentStr = extractMessageFromProviderPayload(message);
         const thoughtItemsSnapshot = [...recentsThoughtsRef.current];
+
         setMessages((prev) => [
           ...prev,
-          { role: 'assistant', content: parsed.content, thoughtItems: thoughtItemsSnapshot },
+          {
+            role: 'assistant',
+            kind: 'message',
+            content: contentStr,
+            thoughtItems: thoughtItemsSnapshot,
+          },
         ]);
+
+        recentsThoughtsRef.current = [];
+        return;
       }
 
-      if (state === 'final' || state === 'aborted' || state === 'error') {
+      else if (state === 'aborted') {
+        const contentStr = extractMessageFromProviderPayload(message);
+        const thoughtItemsSnapshot = [...recentsThoughtsRef.current];
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            kind: 'abortion',
+            content: contentStr,
+            thoughtItems: thoughtItemsSnapshot,
+          },
+        ]);
+
         recentsThoughtsRef.current = [];
+        return;
+      }
+
+      else if (state === 'error') {
+        const contentStr = extractMessageFromProviderPayload(message);
+        const thoughtItemsSnapshot = [...recentsThoughtsRef.current];
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            kind: 'error',
+            content: contentStr,
+            thoughtItems: thoughtItemsSnapshot,
+          },
+        ]);
+
+        recentsThoughtsRef.current = [];
+        return;
       }
       return;
     }
 
-    if (typeof ev === 'string' && (ev.startsWith('agent') || ev.includes('stream'))) {
-      const p = payload as { stream?: string; data?: unknown } | undefined;
-      if (p?.stream === 'reasoning' && p.data && typeof (p.data as { text?: unknown }).text === 'string') {
-        const text = (p.data as { text: string }).text;
-        recentsThoughtsRef.current = [
-          ...recentsThoughtsRef.current,
-          { kind: 'internalMonologue', thought: text },
-        ];
-        setMessages((prev) => [...prev, { role: 'assistant', content: null, thoughtItems: recentsThoughtsRef.current }]);
-      }
-      const toolLabel = p?.data ? toolHintFromAgentStreamData(p.data) : null;
-      if (toolLabel) {
-        recentsThoughtsRef.current = [
-          ...recentsThoughtsRef.current,
-          { kind: 'toolCall', toolName: toolLabel },
-        ];
-        setMessages((prev) => [...prev, { role: 'assistant', content: null, thoughtItems: recentsThoughtsRef.current }]);
-      }
-    }
+    // if (typeof ev === 'string' && (ev.startsWith('agent') || ev.includes('stream'))) {
+    //   const p = payload as { stream?: string; data?: unknown } | undefined;
+    //   if (p?.stream === 'reasoning' && p.data && typeof (p.data as { text?: unknown }).text === 'string') {
+    //     const text = (p.data as { text: string }).text;
+    //     recentsThoughtsRef.current = [
+    //       ...recentsThoughtsRef.current,
+    //       { kind: 'internalMonologue', thought: text },
+    //     ];
+    //     setMessages((prev) => [...prev, { role: 'assistant', content: null, thoughtItems: recentsThoughtsRef.current }]);
+    //   }
+    //   const toolLabel = p?.data ? toolHintFromAgentStreamData(p.data) : null;
+    //   if (toolLabel) {
+    //     recentsThoughtsRef.current = [
+    //       ...recentsThoughtsRef.current,
+    //       { kind: 'toolCall', toolName: toolLabel },
+    //     ];
+    //     setMessages((prev) => [...prev, { role: 'assistant', content: null, thoughtItems: recentsThoughtsRef.current }]);
+    //   }
+    // }
   }, []);
 
   const addUserMessage = useCallback((message: string) => {
     setMessages((prev) => [...prev, { role: 'user', content: message }]);
   }, []);
 
+  const replaceFromFetchedHistory = useCallback((history: FetchedChatMessage[]) => {
+    recentsThoughtsRef.current = [];
+    setMessages(parseFetchedHistoryIntoChatMessages(history));
+  }, []);
+
   return {
     messages,
     addUserMessage,
     handleStreamEvent,
+    replaceFromFetchedHistory,
   };
 }

@@ -23,10 +23,11 @@ function approxTextCharactersFromMessage(message: ChatMessage): number {
 
 function isTrailingEmptyAssistantPlaceholder(message: ChatMessage): boolean {
   const contentStr = typeof message.content === 'string' ? message.content : String(message.content ?? '');
+  const kind = message.kind ?? 'message';
   return (
     (message.role === 'ai' || message.role === 'assistant') &&
     !contentStr.trim() &&
-    !message.isError
+    kind === 'message'
   );
 }
 
