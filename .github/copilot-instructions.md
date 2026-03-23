@@ -83,6 +83,8 @@ When optional JSX has **no else** UI, use **`{flag && (…)}`**, not **`{flag ? 
 
 Store optional deep docs in `docs/`. The **README** remains the operator source for deploy, webhooks, and gateway setup.
 
+Documentation MUST not be used as an authoritative reference for how the project currently works or how specific code paths behave. For behavior/implementation details, use the codebase and any relevant external/official service documentation instead—unless the task explicitly instructs you to use `docs/`.
+
 Each `docs/` page: why it exists → conceptual model → flows → technical details → technical gotchas. Use Mermaid for diagrams.
 
 ---

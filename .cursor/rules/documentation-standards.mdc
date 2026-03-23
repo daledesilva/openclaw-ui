@@ -11,6 +11,12 @@ Store documentation in a `docs/` folder. Organise into separate pages per concep
 
 The **README** at the repo root is the primary operator playbook for deploy, webhooks, and gateway setup; keep it authoritative for those flows. Add `docs/` for deeper design or troubleshooting when needed.
 
+## Docs Are Not an Implementation Reference
+
+Documentation MUST not be used as a reference for how the project currently works or how specific code paths behave.
+
+When you need behavioral or implementation details, use the codebase and any relevant external/official service documentation instead—unless the task explicitly instructs you to use `docs/`.
+
 ## Structure
 
 Every documentation page should follow this order:
